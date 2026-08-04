@@ -1,0 +1,41 @@
+# Master orchestration config for the soil-amelioration scenario experiments.
+#
+# This is the single human-readable control surface. `generate.py` reads it to
+# build, per experiment, an isolated run directory containing:
+#   project/project.csv      (period + grid + vIDPL management)
+#   project/project.proj.xml  (weather-interface path + divider for the climate source)
+#   data/soil/soil.csv        (the chosen soil scenario)
+#   config.yaml               (the `cluster:` block the existing runner consumes)
+#
+# Experiment matrix = 17 climate scenarios x 5 soil scenarios = 85 per crop.
+
+repo_root: /beegfs/halder/GITHUB/RESEARCH/soil-amelioration-scenarios
+
+paths:
+  point_grid: data/raw/point_to_nearest_grid.csv # PointID -> nearest grid cell
+  soil_dir: data/raw/soil_scenarios # <SOIL>_BZE.csv files
+  runs_subdir: runs # simplace/<crop>/runs/<exp_id>/
+
+# The five phenology/LAI/yield-calibrated crops.
+crops: [winter_wheat, winter_rapeseed, spring_barley, potato, maize]
+
+# Soil scenarios. Files are <SOIL>_BZE.csv in paths.soil_dir. S1 is the baseline.
+soils: [S1, S2, S3, DL, DLB]
+
+# Climate sources -----------------------------------------------------------
+climate_dwd: /beegfs/common/data/climate/dwd/csvs/germany_ubn_1951-01-01_to_2024-08-30
+climate_root_hyras: /data01/FDS/muduchuru/Atmos/NEXGDDP_HYRAS_BC_CSV
+gcms: [ACCESS-CM2, CanESM5, EC-Earth3, GFDL-ESM4, MIROC6]
+
+# Period table (inclusive years) + the date-string baked into HYRAS filenames.
+periods:
+  historical: { start: 1951, end: 2014, datestr: "19510101_20141231" }
+  future: { start: 2015, end: 2100, datestr: "20150101_21001231" }
+
+# SLURM / Singularity defaults for the generated `cluster:` blocks.
+slurm:
+  singularity_image: /beegfs/common/singularity/simplace/simplace_5.0-3897.sif
+  partition: compute
+  walltime: "03:00:00"
+  num_nodes: 50 # per experiment; sized so many experiments can run concurrently
+  num_tasks_per_node: 8

@@ -1,0 +1,8 @@
+Phenology:
+    TSUM1: 587
+    TSUM2: 1084
+
+LAI:
+    RGRLAI: 0.06186
+    SLATableSLA: [0.015, 0.0161, 0.021]
+

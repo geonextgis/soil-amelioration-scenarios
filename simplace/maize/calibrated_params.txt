@@ -1,0 +1,3 @@
+Phenology:
+    TSUM1: 738
+    TSUM2: 693

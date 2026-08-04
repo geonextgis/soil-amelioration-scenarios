@@ -1,0 +1,273 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<fertilizerparameters>
+	<fertilizer>
+		<parameter id="Fertilizertype">Guelle</parameter>
+		<parameter id="Nitrate" description="gram of nitrate in 1 gram manure"> 0.0 </parameter>
+		<parameter id="Ammonium" description="gram of ammonium in 1 gram manure"> 0.003585 </parameter>
+		<parameter id="Potassium" description="gram of potassium in 1 gram manure"> 0.003317 </parameter>
+		<parameter id="Phosphorus" description="gram of phosphorus in 1 gram manure"> 0.001253 </parameter>
+		<parameter id="NitrateAndAmmonium" description="gram of nitrate and ammonium in 1 gram fertilizer"> 0.003585 </parameter>
+		<parameter id="OrganicC" description="gram of Organic C in 1 gram manure"> 0.011097 </parameter>
+		<parameter id="OrganicN" description="gram of Organic N in 1 gram manure"> 0.001110 </parameter>
+	</fertilizer>
+	<fertilizer>
+		<parameter id="Fertilizertype">Jauche</parameter>
+		<parameter id="Nitrate" description="gram of nitrate in 1 gram manure"> 0.0 </parameter>
+		<parameter id="Ammonium" description="gram of ammonium in 1 gram manure"> 0.001707 </parameter>
+		<parameter id="Potassium" description="gram of potassium in 1 gram manure"> 0.002519 </parameter>
+		<parameter id="Phosphorus" description="gram of phosphorus in 1 gram manure"> 0.000358 </parameter>
+		<parameter id="NitrateAndAmmonium" description="gram of nitrate and ammonium in 1 gram fertilizer"> 0.001707 </parameter>
+		<parameter id="OrganicC" description="gram of Organic C in 1 gram manure"> 0.0034146 </parameter>
+		<parameter id="OrganicN" description="gram of Organic N in 1 gram manure"> 0.00034146 </parameter>
+	</fertilizer>
+	<fertilizer>
+		<parameter id="Fertilizertype">PK</parameter>
+		<parameter id="Nitrate" description="gram of nitrate in 1 gram fertilizer"> 0.0 </parameter>
+		<parameter id="Ammonium" description="gram of ammonium in 1 gram fertilizer"> 0.0 </parameter>
+		<parameter id="Potassium" description="gram of potassium in 1 gram fertilizer"> 0.083 </parameter>
+		<parameter id="Phosphorus" description="gram of phosphorus in 1 gram fertilizer"> 0.0792 </parameter>
+		<parameter id="NitrateAndAmmonium" description="gram of nitrate and ammonium in 1 gram fertilizer"> 0.0 </parameter>
+		<parameter id="OrganicC" description="gram of Organic C in 1 gram manure"> 0.0</parameter>
+		<parameter id="OrganicN" description="gram of Organic N in 1 gram manure"> 0.0</parameter>
+	</fertilizer>
+	<fertilizer>	
+		<parameter id="Fertilizertype">KAS</parameter>
+		<parameter id="Nitrate" description="gram of nitrate in 1 gram fertilizer"> 0.135 </parameter>
+		<parameter id="Ammonium" description="gram of ammonium in 1 gram fertilizer"> 0.135 </parameter>
+		<parameter id="Potassium" description="gram of potassium in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="Phosphorus" description="gram of phosphorus in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="NitrateAndAmmonium" description="gram of nitrate and ammonium in 1 gram fertilizer"> 0.27 </parameter>
+		<parameter id="OrganicC" description="gram of Organic C in 1 gram manure"> 0.0</parameter>
+		<parameter id="OrganicN" description="gram of Organic N in 1 gram manure"> 0.0</parameter>
+	</fertilizer>
+	<fertilizer>
+		<parameter id="Fertilizertype">DAP</parameter>
+		<parameter id="Nitrate" description="gram of nitrate in 1 gram fertilizer"> 0.09 </parameter>
+		<parameter id="Ammonium" description="gram of ammonium in 1 gram fertilizer"> 0.09 </parameter>
+		<parameter id="Potassium" description="gram of potassium in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="Phosphorus" description="gram of phosphorus in 1 gram fertilizer"> 0.2024 </parameter>
+		<parameter id="NitrateAndAmmonium" description="gram of nitrate and ammonium in 1 gram fertilizer"> 0.18 </parameter>
+		<parameter id="OrganicC" description="gram of Organic C in 1 gram manure"> 0.0</parameter>
+		<parameter id="OrganicN" description="gram of Organic N in 1 gram manure"> 0.0</parameter>
+	</fertilizer>
+	<fertilizer>	
+		<parameter id="Fertilizertype">KASS</parameter>
+		<parameter id="Nitrate" description="gram of nitrate in 1 gram fertilizer"> 0.12 </parameter>
+		<parameter id="Ammonium" description="gram of ammonium in 1 gram fertilizer"> 0.12 </parameter>
+		<parameter id="Potassium" description="gram of potassium in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="Phosphorus" description="gram of phosphorus in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="NitrateAndAmmonium" description="gram of nitrate and ammonium in 1 gram fertilizer"> 0.24 </parameter>
+		<parameter id="OrganicC" description="gram of Organic C in 1 gram manure"> 0.0</parameter>
+		<parameter id="OrganicN" description="gram of Organic N in 1 gram manure"> 0.0</parameter>
+	</fertilizer>
+	<fertilizer>	
+		<parameter id="Fertilizertype">Urea</parameter>
+		<parameter id="Nitrate" description="gram of nitrate in 1 gram fertilizer"> 0.23 </parameter>
+		<parameter id="Ammonium" description="gram of ammonium in 1 gram fertilizer"> 0.23 </parameter>
+		<parameter id="Potassium" description="gram of potassium in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="Phosphorus" description="gram of phosphorus in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="NitrateAndAmmonium" description="gram of nitrate and ammonium in 1 gram fertilizer"> 0.46 </parameter>
+		<parameter id="OrganicC" description="gram of Organic C in 1 gram manure"> 0.0</parameter>
+		<parameter id="OrganicN" description="gram of Organic N in 1 gram manure"> 0.0</parameter>
+	</fertilizer>
+	<fertilizer>	
+		<parameter id="Fertilizertype">KASSMG</parameter>
+		<parameter id="Nitrate" description="gram of nitrate in 1 gram fertilizer"> 0.12 </parameter>
+		<parameter id="Ammonium" description="gram of ammonium in 1 gram fertilizer"> 0.12 </parameter>
+		<parameter id="Potassium" description="gram of potassium in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="Phosphorus" description="gram of phosphorus in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="NitrateAndAmmonium" description="gram of nitrate and ammonium in 1 gram fertilizer"> 0.24 </parameter>
+		<parameter id="OrganicC" description="gram of Organic C in 1 gram manure"> 0.0</parameter>
+		<parameter id="OrganicN" description="gram of Organic N in 1 gram manure"> 0.0</parameter>
+	</fertilizer>
+	<fertilizer>	
+		<parameter id="Fertilizertype">ASS</parameter>
+		<parameter id="Nitrate" description="gram of nitrate in 1 gram fertilizer"> 0.07 </parameter>
+		<parameter id="Ammonium" description="gram of ammonium in 1 gram fertilizer"> 0.19 </parameter>
+		<parameter id="Potassium" description="gram of potassium in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="Phosphorus" description="gram of phosphorus in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="NitrateAndAmmonium" description="gram of nitrate and ammonium in 1 gram fertilizer"> 0.26 </parameter>
+		<parameter id="OrganicC" description="gram of Organic C in 1 gram manure"> 0.0</parameter>
+		<parameter id="OrganicN" description="gram of Organic N in 1 gram manure"> 0.0</parameter>
+	</fertilizer>
+	<fertilizer>	
+		<parameter id="Fertilizertype">ASS_st</parameter>
+		<parameter id="Nitrate" description="gram of nitrate in 1 gram fertilizer"> 0.075 </parameter>
+		<parameter id="Ammonium" description="gram of ammonium in 1 gram fertilizer"> 0.185 </parameter>
+		<parameter id="Potassium" description="gram of potassium in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="Phosphorus" description="gram of phosphorus in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="NitrateAndAmmonium" description="gram of nitrate and ammonium in 1 gram fertilizer"> 0.26 </parameter>
+		<parameter id="OrganicC" description="gram of Organic C in 1 gram manure"> 0.0</parameter>
+		<parameter id="OrganicN" description="gram of Organic N in 1 gram manure"> 0.0</parameter>
+	</fertilizer>
+	<fertilizer>	
+		<parameter id="Fertilizertype">SSA</parameter>
+		<parameter id="Nitrate" description="gram of nitrate in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="Ammonium" description="gram of ammonium in 1 gram fertilizer"> 0.21 </parameter>
+		<parameter id="Potassium" description="gram of potassium in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="Phosphorus" description="gram of phosphorus in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="NitrateAndAmmonium" description="gram of nitrate and ammonium in 1 gram fertilizer"> 0.21 </parameter>
+		<parameter id="OrganicC" description="gram of Organic C in 1 gram manure"> 0.0</parameter>
+		<parameter id="OrganicN" description="gram of Organic N in 1 gram manure"> 0.0</parameter>
+	</fertilizer>
+	<fertilizer>	
+		<parameter id="Fertilizertype">Harnstoff</parameter>
+		<parameter id="Nitrate" description="gram of nitrate in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="Ammonium" description="gram of ammonium in 1 gram fertilizer"> 0.46 </parameter>
+		<parameter id="Potassium" description="gram of potassium in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="Phosphorus" description="gram of phosphorus in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="NitrateAndAmmonium" description="gram of nitrate and ammonium in 1 gram fertilizer"> 0.46 </parameter>
+		<parameter id="OrganicC" description="gram of Organic C in 1 gram manure"> 0.0</parameter>
+		<parameter id="OrganicN" description="gram of Organic N in 1 gram manure"> 0.0</parameter>
+	</fertilizer>
+	<fertilizer>	
+		<parameter id="Fertilizertype">Harnstoff_st</parameter>
+		<parameter id="Nitrate" description="gram of nitrate in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="Ammonium" description="gram of ammonium in 1 gram fertilizer"> 0.46 </parameter>
+		<parameter id="Potassium" description="gram of potassium in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="Phosphorus" description="gram of phosphorus in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="NitrateAndAmmonium" description="gram of nitrate and ammonium in 1 gram fertilizer"> 0.46 </parameter>
+		<parameter id="OrganicC" description="gram of Organic C in 1 gram manure"> 0.0</parameter>
+		<parameter id="OrganicN" description="gram of Organic N in 1 gram manure"> 0.0</parameter>
+	</fertilizer>
+	<fertilizer>	
+		<parameter id="Fertilizertype">YU</parameter>
+		<parameter id="Nitrate" description="gram of nitrate in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="Ammonium" description="gram of ammonium in 1 gram fertilizer"> 0.38 </parameter>
+		<parameter id="Potassium" description="gram of potassium in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="Phosphorus" description="gram of phosphorus in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="NitrateAndAmmonium" description="gram of nitrate and ammonium in 1 gram fertilizer"> 0.38 </parameter>
+		<parameter id="OrganicC" description="gram of Organic C in 1 gram manure"> 0.0</parameter>
+		<parameter id="OrganicN" description="gram of Organic N in 1 gram manure"> 0.0</parameter>
+	</fertilizer>
+	<fertilizer>	
+		<parameter id="Fertilizertype">Piamon</parameter>
+		<parameter id="Nitrate" description="gram of nitrate in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="Ammonium" description="gram of ammonium in 1 gram fertilizer"> 0.33 </parameter>
+		<parameter id="Potassium" description="gram of potassium in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="Phosphorus" description="gram of phosphorus in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="NitrateAndAmmonium" description="gram of nitrate and ammonium in 1 gram fertilizer"> 0.33 </parameter>
+		<parameter id="OrganicC" description="gram of Organic C in 1 gram manure"> 0.0</parameter>
+		<parameter id="OrganicN" description="gram of Organic N in 1 gram manure"> 0.0</parameter>
+	</fertilizer>
+	<fertilizer>	
+		<parameter id="Fertilizertype">Perlka</parameter>
+		<parameter id="Nitrate" description="gram of nitrate in 1 gram fertilizer"> 0.015 </parameter>
+		<parameter id="Ammonium" description="gram of ammonium in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="Potassium" description="gram of potassium in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="Phosphorus" description="gram of phosphorus in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="NitrateAndAmmonium" description="gram of nitrate and ammonium in 1 gram fertilizer"> 0.015 </parameter>
+		<parameter id="OrganicC" description="gram of Organic C in 1 gram manure"> 0.0</parameter>
+		<parameter id="OrganicN" description="gram of Organic N in 1 gram manure"> 0.0</parameter>
+	</fertilizer>
+	<fertilizer>	
+		<parameter id="Fertilizertype">AHL_1</parameter>
+		<parameter id="Nitrate" description="gram of nitrate in 1 gram fertilizer"> 0.07 </parameter>
+		<parameter id="Ammonium" description="gram of ammonium in 1 gram fertilizer"> 0.21 </parameter>
+		<parameter id="Potassium" description="gram of potassium in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="Phosphorus" description="gram of phosphorus in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="NitrateAndAmmonium" description="gram of nitrate and ammonium in 1 gram fertilizer"> 0.28 </parameter>
+		<parameter id="OrganicC" description="gram of Organic C in 1 gram manure"> 0.0</parameter>
+		<parameter id="OrganicN" description="gram of Organic N in 1 gram manure"> 0.0</parameter>
+	</fertilizer>
+	<fertilizer>	
+		<parameter id="Fertilizertype">AHL_2</parameter>
+		<parameter id="Nitrate" description="gram of nitrate in 1 gram fertilizer"> 0.07 </parameter>
+		<parameter id="Ammonium" description="gram of ammonium in 1 gram fertilizer"> 0.23 </parameter>
+		<parameter id="Potassium" description="gram of potassium in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="Phosphorus" description="gram of phosphorus in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="NitrateAndAmmonium" description="gram of nitrate and ammonium in 1 gram fertilizer"> 0.30 </parameter>
+		<parameter id="OrganicC" description="gram of Organic C in 1 gram manure"> 0.0</parameter>
+		<parameter id="OrganicN" description="gram of Organic N in 1 gram manure"> 0.0</parameter>
+	</fertilizer>
+	<fertilizer>	
+		<parameter id="Fertilizertype">ALF</parameter>
+		<parameter id="Nitrate" description="gram of nitrate in 1 gram fertilizer"> 0.07 </parameter>
+		<parameter id="Ammonium" description="gram of ammonium in 1 gram fertilizer"> 0.21 </parameter>
+		<parameter id="Potassium" description="gram of potassium in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="Phosphorus" description="gram of phosphorus in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="NitrateAndAmmonium" description="gram of nitrate and ammonium in 1 gram fertilizer"> 0.28 </parameter>
+		<parameter id="OrganicC" description="gram of Organic C in 1 gram manure"> 0.0</parameter>
+		<parameter id="OrganicN" description="gram of Organic N in 1 gram manure"> 0.0</parameter>
+	</fertilizer>
+	<fertilizer>	
+		<parameter id="Fertilizertype">Piasan</parameter>
+		<parameter id="Nitrate" description="gram of nitrate in 1 gram fertilizer"> 0.05 </parameter>
+		<parameter id="Ammonium" description="gram of ammonium in 1 gram fertilizer"> 0.20 </parameter>
+		<parameter id="Potassium" description="gram of potassium in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="Phosphorus" description="gram of phosphorus in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="NitrateAndAmmonium" description="gram of nitrate and ammonium in 1 gram fertilizer"> 0.25 </parameter>
+		<parameter id="OrganicC" description="gram of Organic C in 1 gram manure"> 0.0</parameter>
+		<parameter id="OrganicN" description="gram of Organic N in 1 gram manure"> 0.0</parameter>
+	</fertilizer>
+	<fertilizer>	
+		<parameter id="Fertilizertype">ALF_S</parameter>
+		<parameter id="Nitrate" description="gram of nitrate in 1 gram fertilizer"> 0.05 </parameter>
+		<parameter id="Ammonium" description="gram of ammonium in 1 gram fertilizer"> 0.20 </parameter>
+		<parameter id="Potassium" description="gram of potassium in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="Phosphorus" description="gram of phosphorus in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="NitrateAndAmmonium" description="gram of nitrate and ammonium in 1 gram fertilizer"> 0.25 </parameter>
+		<parameter id="OrganicC" description="gram of Organic C in 1 gram manure"> 0.0</parameter>
+		<parameter id="OrganicN" description="gram of Organic N in 1 gram manure"> 0.0</parameter>
+	</fertilizer>
+	<fertilizer>	
+		<parameter id="Fertilizertype">ASL</parameter>
+		<parameter id="Nitrate" description="gram of nitrate in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="Ammonium" description="gram of ammonium in 1 gram fertilizer"> 0.08 </parameter>
+		<parameter id="Potassium" description="gram of potassium in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="Phosphorus" description="gram of phosphorus in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="NitrateAndAmmonium" description="gram of nitrate and ammonium in 1 gram fertilizer"> 0.08 </parameter>
+		<parameter id="OrganicC" description="gram of Organic C in 1 gram manure"> 0.0</parameter>
+		<parameter id="OrganicN" description="gram of Organic N in 1 gram manure"> 0.0</parameter>
+	</fertilizer>
+	<fertilizer>	
+		<parameter id="Fertilizertype">Lenasol</parameter>
+		<parameter id="Nitrate" description="gram of nitrate in 1 gram fertilizer"> 0.035 </parameter>
+		<parameter id="Ammonium" description="gram of ammonium in 1 gram fertilizer"> 0.115 </parameter>
+		<parameter id="Potassium" description="gram of potassium in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="Phosphorus" description="gram of phosphorus in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="NitrateAndAmmonium" description="gram of nitrate and ammonium in 1 gram fertilizer"> 0.15 </parameter>
+		<parameter id="OrganicC" description="gram of Organic C in 1 gram manure"> 0.0</parameter>
+		<parameter id="OrganicN" description="gram of Organic N in 1 gram manure"> 0.0</parameter>
+	</fertilizer>
+	<fertilizer>	
+		<parameter id="Fertilizertype">Domamon</parameter>
+		<parameter id="Nitrate" description="gram of nitrate in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="Ammonium" description="gram of ammonium in 1 gram fertilizer"> 0.20 </parameter>
+		<parameter id="Potassium" description="gram of potassium in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="Phosphorus" description="gram of phosphorus in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="NitrateAndAmmonium" description="gram of nitrate and ammonium in 1 gram fertilizer"> 0.20 </parameter>
+		<parameter id="OrganicC" description="gram of Organic C in 1 gram manure"> 0.0</parameter>
+		<parameter id="OrganicN" description="gram of Organic N in 1 gram manure"> 0.0</parameter>
+	</fertilizer>
+	<fertilizer>	
+		<parameter id="Fertilizertype">ATS</parameter>
+		<parameter id="Nitrate" description="gram of nitrate in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="Ammonium" description="gram of ammonium in 1 gram fertilizer"> 0.12 </parameter>
+		<parameter id="Potassium" description="gram of potassium in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="Phosphorus" description="gram of phosphorus in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="NitrateAndAmmonium" description="gram of nitrate and ammonium in 1 gram fertilizer"> 0.12 </parameter>
+		<parameter id="OrganicC" description="gram of Organic C in 1 gram manure"> 0.0</parameter>
+		<parameter id="OrganicN" description="gram of Organic N in 1 gram manure"> 0.0</parameter>
+	</fertilizer>
+	<fertilizer>	
+		<parameter id="Fertilizertype">P</parameter>
+		<parameter id="Nitrate" description="gram of nitrate in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="Ammonium" description="gram of ammonium in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="Potassium" description="gram of potassium in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="Phosphorus" description="gram of phosphorus in 1 gram fertilizer"> 0.4364 </parameter>
+		<parameter id="NitrateAndAmmonium" description="gram of nitrate and ammonium in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="OrganicC" description="gram of Organic C in 1 gram manure"> 0.0</parameter>
+		<parameter id="OrganicN" description="gram of Organic N in 1 gram manure"> 0.0</parameter>
+	</fertilizer>
+	<fertilizer>	
+		<parameter id="Fertilizertype">K</parameter>
+		<parameter id="Nitrate" description="gram of nitrate in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="Ammonium" description="gram of ammonium in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="Potassium" description="gram of potassium in 1 gram fertilizer"> 0.8302 </parameter>
+		<parameter id="Phosphorus" description="gram of phosphorus in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="NitrateAndAmmonium" description="gram of nitrate and ammonium in 1 gram fertilizer"> 0 </parameter>
+		<parameter id="OrganicC" description="gram of Organic C in 1 gram manure"> 0.0</parameter>
+		<parameter id="OrganicN" description="gram of Organic N in 1 gram manure"> 0.0</parameter>
+	</fertilizer>				
+</fertilizerparameters>
