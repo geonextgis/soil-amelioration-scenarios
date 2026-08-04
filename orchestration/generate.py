@@ -9,6 +9,7 @@ crop can be generated and submitted without clobbering each other:
       solution/solution.sol.xml   -> symlink to the crop's shared solution
       data/{crop,management,slim,soilcnp} -> symlinks to the crop's shared inputs
       data/soil/soil.csv          (real file: the chosen soil scenario)
+      data/co2/co2.csv            (real file: the CO2 forcing for this climate)
       project/project.proj.xml    (templated: weather path + divider per climate)
       project/project.csv         (generated: period + grid + vIDPL management)
       config.yaml                 (the `cluster:` block for simplace_runner_cluster.py)
@@ -48,8 +49,17 @@ import yaml
 DWD_WEATHER = "${_DATADIR_}/${vRow}/daily_mean_RES1_C${vColumn}R${vRow}.csv.gz"
 DWD_DIVIDER = None  # whitespace/tab -> SIMPLACE self-closing <divider />
 
-# Shared crop input subdirs that are symlinked (everything except soil, which varies).
+# Shared crop input subdirs that are symlinked (everything except soil and co2,
+# which are staged per experiment).
 SHARED_DATA_SUBDIRS = ["crop", "management", "slim", "soilcnp"]
+
+# CO2 forcing. Every solution reads data/co2/co2.csv; the climate decides which of
+# the crop's data/co2/*.csv is copied to that name — same pattern as the soil
+# scenario -> data/soil/soil.csv. Without this the SSP runs would silently be
+# driven by observed CO2, which also has no rows past 2026.
+CO2_OBSERVED = "co2_mm_observed.csv"
+CO2_BY_SSP = {"ssp126": "co2_mm_ssp126_future.csv",
+              "ssp370": "co2_mm_ssp370_future.csv"}
 
 
 @dataclass
@@ -63,6 +73,7 @@ class Climate:
     end: int
     idpl_rule: str       # "dynamic" | "nuts_median"
     grid: str            # "baseline" (reuse existing CSV) | "hyras"
+    co2_file: str        # which data/co2/*.csv is staged as data/co2/co2.csv
 
 
 def build_climate_registry(cfg: dict) -> dict[str, Climate]:
@@ -77,6 +88,7 @@ def build_climate_registry(cfg: dict) -> dict[str, Climate]:
         id="DWD", kind="baseline", mount_data=cfg["climate_dwd"],
         weather_path=DWD_WEATHER, divider=DWD_DIVIDER,
         start=0, end=0, idpl_rule="dynamic", grid="baseline",
+        co2_file=CO2_OBSERVED,
     )
 
     # 2) HYRAS OBS (historical observations).
@@ -85,7 +97,7 @@ def build_climate_registry(cfg: dict) -> dict[str, Climate]:
         weather_path=("${_DATADIR_}/${vColumn}/"
                       f"obs_{hist['datestr']}_C${{vColumn}}R${{vRow}}.csv"),
         divider=",", start=hist["start"], end=hist["end"],
-        idpl_rule="nuts_median", grid="hyras",
+        idpl_rule="nuts_median", grid="hyras", co2_file=CO2_OBSERVED,
     )
 
     # 3) 5 GCMs x historical.
@@ -96,7 +108,7 @@ def build_climate_registry(cfg: dict) -> dict[str, Climate]:
             weather_path=("${_DATADIR_}/${vColumn}/"
                           f"{m}_historical_{hist['datestr']}_C${{vColumn}}R${{vRow}}.csv"),
             divider=",", start=hist["start"], end=hist["end"],
-            idpl_rule="nuts_median", grid="hyras",
+            idpl_rule="nuts_median", grid="hyras", co2_file=CO2_OBSERVED,
         )
 
     # 4) 5 GCMs x {ssp126, ssp370} future.
@@ -108,7 +120,7 @@ def build_climate_registry(cfg: dict) -> dict[str, Climate]:
                 weather_path=("${_DATADIR_}/${vColumn}/"
                               f"{m}_{ssp}_{fut['datestr']}_C${{vColumn}}R${{vRow}}.csv"),
                 divider=",", start=fut["start"], end=fut["end"],
-                idpl_rule="nuts_median", grid="hyras",
+                idpl_rule="nuts_median", grid="hyras", co2_file=CO2_BY_SSP[ssp],
             )
     return reg
 
@@ -214,6 +226,7 @@ def generate(crop: str, climate: Climate, soil: str, cfg: dict,
         "exp_id": exp_id, "crop": crop, "climate": climate.id, "soil": soil,
         "run_dir": str(run_dir), "mount_data": climate.mount_data,
         "grid": climate.grid, "idpl_rule": climate.idpl_rule,
+        "co2": climate.co2_file,
         "period": "baseline (per existing CSV)" if climate.grid == "baseline"
                   else f"{climate.start}-{climate.end}",
     }
@@ -229,6 +242,7 @@ def generate(crop: str, climate: Climate, soil: str, cfg: dict,
     # Directory skeleton + symlinks to shared inputs.
     (run_dir / "project").mkdir(parents=True, exist_ok=True)
     (run_dir / "data" / "soil").mkdir(parents=True, exist_ok=True)
+    (run_dir / "data" / "co2").mkdir(parents=True, exist_ok=True)
     (run_dir / "out").mkdir(parents=True, exist_ok=True)
     (run_dir / "solution").mkdir(parents=True, exist_ok=True)
     link_or_replace(crop_dir / "solution" / "solution.sol.xml",
@@ -238,6 +252,13 @@ def generate(crop: str, climate: Climate, soil: str, cfg: dict,
 
     # Soil scenario (real file). All crop solutions read data/soil/soil.csv.
     shutil.copyfile(soil_src, run_dir / "data" / "soil" / "soil.csv")
+
+    # CO2 forcing (real file). All crop solutions read data/co2/co2.csv; which
+    # source file lands there is what makes an SSP run actually see SSP CO2.
+    co2_src = crop_dir / "data" / "co2" / climate.co2_file
+    if not co2_src.exists():
+        raise FileNotFoundError(co2_src)
+    shutil.copyfile(co2_src, run_dir / "data" / "co2" / "co2.csv")
 
     # Project CSV.
     out_csv = run_dir / "project" / "project.csv"

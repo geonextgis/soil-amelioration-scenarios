@@ -11,6 +11,7 @@ optimization/
   optimize_phenology.py    loss: mean RMSE of flowering + maturity DOY
   optimize_lai.py          loss: RMSE of DVS-binned LAI
   optimize_yield.py        loss: mean RMSE of yearly-mean + state-mean yield
+  evaluate_run.ipynb       visual + metric evaluation of a finished run
   studies/                 <crop>__<target>.db   (Optuna/SQLite, created at runtime)
   results/<crop>__<target>/
       last.json            the most recent trial
@@ -56,6 +57,33 @@ whatever threshold the target needs.
 
 The first trial of a fresh study is the **current `crop.xml` values**, so every
 later trial has a reference loss to beat rather than an arbitrary first draw.
+
+## Evaluating a run — `evaluate_run.ipynb`
+
+Set `CROP` in the one configuration cell and run all cells. The notebook compares
+simulated against observed **phenology, LAI and yield**, with comparison plots and
+RMSE / MAE / R² / bias (plus nRMSE% and Nash–Sutcliffe efficiency) for each.
+
+It finds the outputs itself. `common.discover_runs()` lists every directory under
+`runs/` and `runs_optim/` that holds results; by default each variable is scored
+against its own calibration run (`optim:<target>`) when that has output, and
+otherwise against the most recently written scenario run. Set `SOURCE` to a label
+(`"DWD__S1"`, `"optim:lai"`) to pin all three to one run.
+
+Loading reuses the same `process_result` functions the calibration scripts use, so
+the notebook's numbers are the numbers the optimizer scored — the loss is not
+re-implemented. Each variable's section is independent: a run with no LAI output
+reports that and the other two sections still work.
+
+Two things to know:
+
+- **LAI from a scenario run is not like-for-like.** The LAI observations belong to
+  their own point set and weather grid, so a scenario run matches only a fraction of
+  them. The notebook warns when fewer than half the simulated locations carry
+  observations; use `SOURCE="optim:lai"` for a real LAI evaluation.
+- **Daily output is sampled.** A full run's daily files are tens of millions of rows;
+  `MAX_LAI_LOCATIONS` (default 300) reads an evenly spaced subset. Raise it for a
+  final evaluation, and note the LAI metrics move slightly with it.
 
 ## What a trial actually does
 

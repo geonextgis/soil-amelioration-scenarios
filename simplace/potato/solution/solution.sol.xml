@@ -21,7 +21,6 @@
 		<var id="vK_r" datatype="DOUBLE">1</var>
 		<var id="vK_s" datatype="DOUBLE">1</var>
 		<var id="vWettedSoilFraction" datatype="DOUBLE">1</var>
-		<var id="vCO2" datatype="DOUBLE">380</var>
 		<var id="vRWRTI" datatype="DOUBLE">0.3</var>
 		<!-- for SlimPhosphorus -->
 		<var id="vInitialPNRatio" datatype="DOUBLE">0.09</var> <!-- default: 0.09090909090909090909 -->
@@ -125,6 +124,11 @@
 			<divider>,</divider>
 			<filename>${_WORKDIR_}/data/management/location.csv</filename>
 		</interface>
+		<interface id="co2observedfile" type="CSV">
+			<poolsize>2</poolsize>
+			<divider>,</divider>
+			<filename>${_WORKDIR_}/data/co2/co2.csv</filename>
+		</interface>
 
 
 		<!-- ############################################### output ##################################################### -->
@@ -222,6 +226,13 @@
 				<res datatype="DOUBLE" id="Latitude"/>
 				<res datatype="DOUBLE" id="SunInclination"/>
 				<res datatype="DOUBLE" id="Altitude"/>
+			</header>
+		</resource>
+		<resource id="co2observed" interface="co2observedfile" frequence="DAILY">
+			<header>
+				<res id="year" datatype="INT" key="CURRENT.YEAR"/>
+				<res id="month" datatype="INT" key="CURRENT.MONTH"/>
+				<res id="CO2" datatype="DOUBLE" description="monthly mean CO2 concentration (ppm) from data/co2/co2.csv, staged per climate scenario"/>
 			</header>
 		</resource>
 		<resource id="fertilizerparameters" interface="fertilizercomposition" frequence="BOOLEAN" rule="DefaultManagement.DoUpdateFertilizerSettings" dbcache="FALSE">
@@ -958,8 +969,15 @@
 			<input id="iDTR" source="Radiation.SolarRadiationJ"/>
 		</simcomponent>
 		<!-- #################################################################################################### -->
+		<simcomponent id="CO2Supply" class="net.simplace.sim.components.FWSimpleSimComponent">
+			<description title="Provide monthly CO2 as a daily driving variable">Uses co2observed.CO2 (data/co2/co2.csv, staged per climate scenario).</description>
+			<process>
+				<var id="CO2" datatype="DOUBLE" rule="${co2observed.CO2}"/>
+			</process>
+		</simcomponent>
+		<!-- #################################################################################################### -->
 		<simcomponent id="RadiationUseEfficiency" class="net.simplace.sim.components.models.lintul5.RadiationUseEfficiency">
-			<input id="cCO" source="vCO2"/>
+			<input id="cCO" source="CO2Supply.CO2"/>
 <!-- 			<input id="cCOTB" source="crop.COTB"/> -->
 <!-- 			<input id="cRUETB" source="crop.RUETB"/> -->
 <!-- 			<input id="cTMNFTB" source="crop.TMNFTB"/> -->
@@ -1683,6 +1701,7 @@
 <!-- 				<out id="MaturityDOY" rule="Phenology.MaturityDOY" description="current model date of year" datatype="INT" unit="-"/> -->
 <!-- 				<out id="HarvestDATE" rule="CURRENT.DATE" description="current model date of year" datatype="DATE" unit="-"/> -->
 				<out id="DevStage" rule="Phenology.sDVS" description="development stage of crop (from 0 to 2)" datatype="DOUBLE" unit="http://www.wurvoc.org/vocabularies/om-1.8/one" format="%.6f"/>
+				<out id="CO2" rule="CO2Supply.CO2" description="monthly CO2 concentration (ppm) driving RadiationUseEfficiency" datatype="DOUBLE" format="%.4f"/>
 <!-- 				<out id="Rain" datatype="DOUBLE" mode="SUM" rule="weather.Rain" format="%.6f"/> -->
 <!-- 				<out id="Radiation" datatype="DOUBLE" mode="SUM" rule="weather_transform.SradiationMJ" format="%.6f"/>  -->
 <!-- 				<out id="Tmax" datatype="DOUBLE" mode="AVG" rule="weather.AirTemperatureMax" format="%.6f"/> -->
@@ -1728,6 +1747,7 @@
 				<out id="Radiation" datatype="DOUBLE" mode="SUM" rule="weather_transform.SradiationMJ" format="%.6f"/> 
 				<out id="Tmax" datatype="DOUBLE" mode="AVG" rule="weather.AirTemperatureMax" format="%.6f"/>
 				<out id="Tmin" datatype="DOUBLE" mode="AVG" rule="weather.AirTemperatureMin" format="%.6f"/>
+				<out id="CO2" datatype="DOUBLE" mode="AVG" description="monthly CO2 concentration (ppm) driving RadiationUseEfficiency" rule="CO2Supply.CO2" format="%.4f"/>
 				<out id="TRANRF" rule="LintulWaterStress.TRANRF" mode="AVG" description="Transpiration reduction factor" datatype="DOUBLE" unit="http://www.wurvoc.org/vocabularies/om-1.8/one" format="%.6f"/>
 				<out id="NNI" datatype="DOUBLE" mode="AVG" rule="NPKDemandSlimNP.NNI" format="%.6f"/>
 				<out id="PNI" datatype="DOUBLE" mode="AVG" rule="NPKDemandSlimNP.PNI" format="%.6f"/>

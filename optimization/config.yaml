@@ -21,14 +21,14 @@ slurm:
   singularity_image: /beegfs/common/singularity/simplace/simplace_5.0-3897.sif
   partition: compute
   walltime: "03:00:00"
-  num_nodes: 10
+  num_nodes: 30
   num_tasks_per_node: 8
   debug: false
 
 optuna:
-  sampler: tpe          # tpe | random
+  sampler: tpe # tpe | random
   seed: 42
-  n_startup_trials: 10  # random draws before TPE starts modelling
+  n_startup_trials: 10 # random draws before TPE starts modelling
   # The very first trial of a fresh study is the current crop.xml values, so every
   # later trial has a reference loss to beat.
   enqueue_baseline: true
@@ -51,7 +51,6 @@ input_profiles:
 # Targets. `parameters` uses the same schema as simplace/<crop>/config.yaml.
 # ---------------------------------------------------------------------------
 targets:
-
   phenology:
     exp_name: OPTIM_PHENOLOGY
     project_csv: project/project_{crop}.csv
@@ -102,14 +101,14 @@ targets:
         SLATableSLA:
           type: float
           values:
-            - { low: 0.008, high: 0.012 }   # DVS 0.00  emergence
-            - { low: 0.012, high: 0.020 }   # DVS 0.25  tillering
-            - { low: 0.012, high: 0.018 }   # DVS 0.50  stem elongation
-            - { low: 0.012, high: 0.018 }   # DVS 1.00  anthesis
-            - { low: 0.010, high: 0.018 }   # DVS 1.25  grain filling start
-            - { low: 0.010, high: 0.016 }   # DVS 1.50  grain filling mid
-            - { low: 0.008, high: 0.014 }   # DVS 1.75  grain filling end
-            - { low: 0.008, high: 0.014 }   # DVS 2.00  maturity
+            - { low: 0.008, high: 0.012 } # DVS 0.00  emergence
+            - { low: 0.012, high: 0.020 } # DVS 0.25  tillering
+            - { low: 0.012, high: 0.018 } # DVS 0.50  stem elongation
+            - { low: 0.012, high: 0.018 } # DVS 1.00  anthesis
+            - { low: 0.010, high: 0.018 } # DVS 1.25  grain filling start
+            - { low: 0.010, high: 0.016 } # DVS 1.50  grain filling mid
+            - { low: 0.008, high: 0.014 } # DVS 1.75  grain filling end
+            - { low: 0.008, high: 0.014 } # DVS 2.00  maturity
           precision: 4
     subset:
       n_locations: 400
@@ -138,10 +137,10 @@ targets:
         RUETableRUE:
           type: float
           values:
-            - { low: 2.0, high: 4.5 }   # DVS 0.0  emergence
-            - { low: 2.0, high: 4.5 }   # DVS 1.0  anthesis
-            - { low: 1.5, high: 3.5 }   # DVS 1.3  mid grain filling
-            - { low: 0.0, high: 1.5 }   # DVS 2.0  maturity
+            - { low: 2.0, high: 4.5 } # DVS 0.0  emergence
+            - { low: 2.0, high: 4.5 } # DVS 1.0  anthesis
+            - { low: 1.5, high: 3.5 } # DVS 1.3  mid grain filling
+            - { low: 0.0, high: 1.5 } # DVS 2.0  maturity
           precision: 2
     subset:
       n_locations: 400
@@ -155,7 +154,6 @@ targets:
 # `targets:` here overrides the global target block for this crop only.
 # ---------------------------------------------------------------------------
 crops:
-
   winter_wheat:
     crop_name: winter_wheat
     dm_fraction: 1.0

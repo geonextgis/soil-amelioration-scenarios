@@ -46,7 +46,10 @@ OPTIM_DIR = Path(__file__).resolve().parent
 DEFAULT_CONFIG = OPTIM_DIR / "config.yaml"
 
 # Shared crop inputs that are read-only during calibration -> symlink, never copy.
-SYMLINK_DATA_SUBDIRS = ["slim", "soilcnp", "co2"]
+SYMLINK_DATA_SUBDIRS = ["slim", "soilcnp"]
+# CO2 is staged, not symlinked: every solution reads data/co2/co2.csv and the source
+# file varies by climate. Calibration always runs on DWD observations.
+CO2_SOURCE = "co2_mm_observed.csv"
 # Read-only files inside data/management (the per-location tables are staged).
 SYMLINK_MANAGEMENT_FILES = ["management.xml", "fertilizer_composition.xml"]
 
@@ -77,6 +80,9 @@ class RunSpec:
     # fresh tuber weight while the model reports dry matter, so comparing them
     # raw would make the yield loss chase a units mismatch. 1.0 = already DM.
     dm_fraction: float = 1.0
+    # Lets a consumer score outputs from some *other* run (e.g. the evaluation
+    # notebook pointing at a finished scenario run) without restaging anything.
+    out_override: Path | None = None
 
     @property
     def crop_xml(self) -> Path:
@@ -84,7 +90,7 @@ class RunSpec:
 
     @property
     def out_dir(self) -> Path:
-        return self.run_dir / "out" / self.exp_name
+        return self.out_override or (self.run_dir / "out" / self.exp_name)
 
     @property
     def project_csv(self) -> Path:
@@ -230,8 +236,16 @@ def build_run_dir(spec: RunSpec, rebuild: bool = False) -> dict:
     if rebuild and spec.run_dir.exists():
         shutil.rmtree(spec.run_dir)
 
+    # data/co2 used to be symlinked to the crop's shared dir; it is staged now.
+    # Without this the staging copy below would write *through* the old symlink
+    # and contaminate the shared source directory.
+    stale_co2 = spec.run_dir / "data" / "co2"
+    if stale_co2.is_symlink():
+        stale_co2.unlink()
+
     (spec.run_dir / "project").mkdir(parents=True, exist_ok=True)
     (spec.run_dir / "data" / "soil").mkdir(parents=True, exist_ok=True)
+    (spec.run_dir / "data" / "co2").mkdir(parents=True, exist_ok=True)
     (spec.run_dir / "data" / "management").mkdir(parents=True, exist_ok=True)
     (spec.run_dir / "solution").mkdir(parents=True, exist_ok=True)
     (spec.out_dir).mkdir(parents=True, exist_ok=True)
@@ -257,6 +271,10 @@ def build_run_dir(spec: RunSpec, rebuild: bool = False) -> dict:
 
     # Per-location tables staged under the canonical names the solution reads.
     shutil.copyfile(spec.inputs["soil"], spec.run_dir / "data" / "soil" / "soil.csv")
+    co2_src = spec.crop_dir / "data" / "co2" / CO2_SOURCE
+    if not co2_src.exists():
+        raise SystemExit(f"CO2 forcing missing: {co2_src}")
+    shutil.copyfile(co2_src, spec.run_dir / "data" / "co2" / "co2.csv")
     shutil.copyfile(spec.inputs["location"], spec.run_dir / "data" / "management" / "location.csv")
     shutil.copyfile(spec.inputs["fertilizer"],
                     spec.run_dir / "data" / "management" / f"fertilizer_{spec.crop}.csv")
@@ -267,6 +285,7 @@ def build_run_dir(spec: RunSpec, rebuild: bool = False) -> dict:
         id="DWD", kind="baseline", mount_data=spec.mount_data,
         weather_path=orch.DWD_WEATHER, divider=orch.DWD_DIVIDER,
         start=0, end=0, idpl_rule="dynamic", grid="baseline",
+        co2_file=CO2_SOURCE,
     )
     template = (spec.crop_dir / "project" / "project.proj.xml").read_text()
     (spec.run_dir / "project" / "project.proj.xml").write_text(
@@ -421,14 +440,46 @@ def run_simplace(spec: RunSpec, trial_number: int) -> None:
         raise RuntimeError(f"SIMPLACE produced no output; see {log}")
 
 
-def read_outputs(out_dir: Path, kind: str, max_workers: int = 32) -> pd.DataFrame:
-    """Concatenate every per-location output CSV of one kind ('daily'|'yearly')."""
+def read_outputs(out_dir: Path, kind: str, max_workers: int = 32,
+                 limit: int | None = None) -> pd.DataFrame:
+    """Concatenate every per-location output CSV of one kind ('daily'|'yearly').
+
+    ``limit`` reads an evenly spaced sample of that many locations instead of all
+    of them — daily output for a full 3,000-location run is tens of millions of
+    rows, which is fine for a loss but not for an interactive notebook.
+    """
     paths = sorted(glob(str(out_dir / kind / "*.csv")))
     if not paths:
         raise RuntimeError(f"no {kind} outputs in {out_dir / kind}")
+    if limit and limit < len(paths):
+        idx = np.linspace(0, len(paths) - 1, limit, dtype=int)
+        paths = [paths[i] for i in idx]
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
         frames = list(ex.map(lambda p: pd.read_csv(p, delimiter=";"), paths))
     return pd.concat(frames, ignore_index=True)
+
+
+def discover_runs(crop_dir: Path) -> dict[str, Path]:
+    """Every output directory that holds results for a crop.
+
+    Returns ``{label: out_dir}`` — scenario runs keep their experiment id
+    (``DWD__S1``), calibration runs are prefixed (``optim:phenology``).
+    """
+    found: dict[str, Path] = {}
+    for base, prefix in ((crop_dir / "runs", ""), (crop_dir / "runs_optim", "optim:")):
+        if not base.is_dir():
+            continue
+        for run in sorted(base.iterdir()):
+            out_root = run / "out"
+            if not run.is_dir() or not out_root.is_dir():
+                continue
+            for exp in sorted(out_root.iterdir()):
+                if not exp.is_dir():
+                    continue
+                if any(exp.glob("yearly/*.csv")) or any(exp.glob("daily/*.csv")):
+                    label = f"{prefix}{run.name}" if prefix else exp.name
+                    found[label] = exp
+    return found
 
 
 # ---------------------------------------------------------------------------
@@ -437,17 +488,27 @@ def read_outputs(out_dir: Path, kind: str, max_workers: int = 32) -> pd.DataFram
 def open_study(spec: RunSpec) -> tuple[optuna.Study, bool]:
     """Load (or create) the persistent study. Returns (study, was_created)."""
     o = spec.optuna_cfg
-    if o.get("sampler", "tpe") == "random":
-        sampler = optuna.samplers.RandomSampler(seed=o.get("seed"))
-    else:
-        sampler = optuna.samplers.TPESampler(
-            seed=o.get("seed"), n_startup_trials=o.get("n_startup_trials", 10))
 
     existing = {s.study_name for s in optuna.get_all_study_summaries(storage=spec.storage)}
     study = optuna.create_study(
-        study_name=spec.study_name, storage=spec.storage, sampler=sampler,
+        study_name=spec.study_name, storage=spec.storage,
         direction="minimize", load_if_exists=True,
     )
+
+    # The sampler is constructed fresh in every process, so a CONSTANT seed would
+    # reset its RNG each run and redraw the identical parameter set forever — which
+    # is exactly what one-trial-per-invocation does. Advancing the seed by the trial
+    # count keeps runs reproducible (trial k always gets seed+k) while still moving.
+    seed = o.get("seed")
+    if seed is not None:
+        seed = int(seed) + len(study.trials)
+
+    if o.get("sampler", "tpe") == "random":
+        study.sampler = optuna.samplers.RandomSampler(seed=seed)
+    else:
+        study.sampler = optuna.samplers.TPESampler(
+            seed=seed, n_startup_trials=o.get("n_startup_trials", 10))
+
     return study, spec.study_name not in existing
 
 

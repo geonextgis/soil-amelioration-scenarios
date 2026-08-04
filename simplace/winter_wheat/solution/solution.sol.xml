@@ -127,7 +127,7 @@
 		<interface id="co2observedfile" type="CSV">
 			<poolsize>2</poolsize>
 			<divider>,</divider>
-			<filename>${_WORKDIR_}/data/co2/co2_mm_observed.csv</filename>
+			<filename>${_WORKDIR_}/data/co2/co2.csv</filename>
 		</interface>
 
 
@@ -231,7 +231,7 @@
 			<header>
 				<res id="year" datatype="INT" key="CURRENT.YEAR"/>
 				<res id="month" datatype="INT" key="CURRENT.MONTH"/>
-				<res id="CO2" datatype="DOUBLE" description="average: observed monthly mean CO2 (NOAA Mauna Loa, co2_mm_observed.csv), 1958-2026"/>
+				<res id="CO2" datatype="DOUBLE" description="monthly mean CO2 concentration (ppm) from data/co2/co2.csv, staged per climate scenario"/>
 			</header>
 		</resource>
 		<resource id="fertilizerparameters" interface="fertilizercomposition" frequence="BOOLEAN" rule="DefaultManagement.DoUpdateFertilizerSettings" dbcache="FALSE">
@@ -963,7 +963,7 @@
 		</simcomponent>
 		<!-- #################################################################################################### -->
 		<simcomponent id="CO2Supply" class="net.simplace.sim.components.FWSimpleSimComponent">
-			<description title="Provide monthly CO2 as a daily driving variable">Uses co2observed.CO2 (average, NOAA Mauna Loa co2_mm_observed.csv, 1958-2026).</description>
+			<description title="Provide monthly CO2 as a daily driving variable">Uses co2observed.CO2 (data/co2/co2.csv, staged per climate scenario).</description>
 			<process>
 				<var id="CO2" datatype="DOUBLE" rule="${co2observed.CO2}"/>
 			</process>
@@ -1649,7 +1649,7 @@
 <!-- 				<out id="MaturityDOY" rule="Phenology.MaturityDOY" description="current model date of year" datatype="INT" unit="-"/> -->
 <!-- 				<out id="HarvestDATE" rule="CURRENT.DATE" description="current model date of year" datatype="DATE" unit="-"/> -->
 				<out id="DevStage" rule="Phenology.sDVS" description="development stage of crop (from 0 to 2)" datatype="DOUBLE" unit="http://www.wurvoc.org/vocabularies/om-1.8/one" format="%.6f"/>
-				<out id="CO2" rule="CO2Supply.CO2" description="monthly CO2 (average, NOAA Mauna Loa co2_mm_observed.csv, 1958-2026) driving RadiationUseEfficiency" datatype="DOUBLE" format="%.4f"/>
+				<out id="CO2" rule="CO2Supply.CO2" description="monthly CO2 concentration (ppm) driving RadiationUseEfficiency" datatype="DOUBLE" format="%.4f"/>
 <!-- 				<out id="Rain" datatype="DOUBLE" mode="SUM" rule="weather.Rain" format="%.6f"/> -->
 <!-- 				<out id="Radiation" datatype="DOUBLE" mode="SUM" rule="weather_transform.SradiationMJ" format="%.6f"/>  -->
 <!-- 				<out id="Tmax" datatype="DOUBLE" mode="AVG" rule="weather.AirTemperatureMax" format="%.6f"/> -->
@@ -1695,7 +1695,7 @@
 				<out id="Radiation" datatype="DOUBLE" mode="SUM" rule="weather_transform.SradiationMJ" format="%.6f"/>
 				<out id="Tmax" datatype="DOUBLE" mode="AVG" rule="weather.AirTemperatureMax" format="%.6f"/>
 				<out id="Tmin" datatype="DOUBLE" mode="AVG" rule="weather.AirTemperatureMin" format="%.6f"/>
-				<out id="CO2" datatype="DOUBLE" mode="AVG" description="monthly CO2 (average, NOAA Mauna Loa co2_mm_observed.csv, 1958-2026) driving RadiationUseEfficiency" rule="CO2Supply.CO2" format="%.4f"/>
+				<out id="CO2" datatype="DOUBLE" mode="AVG" description="monthly CO2 concentration (ppm) driving RadiationUseEfficiency" rule="CO2Supply.CO2" format="%.4f"/>
 				<out id="TRANRF" rule="LintulWaterStress.TRANRF" mode="AVG" description="Transpiration reduction factor" datatype="DOUBLE" unit="http://www.wurvoc.org/vocabularies/om-1.8/one" format="%.6f"/>
 				<out id="NNI" datatype="DOUBLE" mode="AVG" rule="NPKDemandSlimNP.NNI" format="%.6f"/>
 				<out id="PNI" datatype="DOUBLE" mode="AVG" rule="NPKDemandSlimNP.PNI" format="%.6f"/>
