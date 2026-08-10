@@ -22,9 +22,9 @@ climate:
 
 slurm:
   singularity_image: /beegfs/common/singularity/simplace/simplace_5.0-3897.sif
-  partition: compute
+  partition: highmem
   walltime: "03:00:00"
-  num_nodes: 50
+  num_nodes: 20
   num_tasks_per_node: 8
   debug: false
 

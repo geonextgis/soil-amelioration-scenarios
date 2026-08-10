@@ -43,8 +43,8 @@
     <parameter id="DVSEND" description="Development stage at harvest (=2.0 at maturity)" unit="http://www.wurvoc.org/vocabularies/om-1.8/one">2.00</parameter>
 
     <!-- Initial -->
-    <parameter id="TDWI" description="Initial total crop dry weight" unit="http://www.wurvoc.org/vocabularies/om-1.8/gram_per_square_metre">21</parameter>
-    <parameter id="RGRLAI" description="Maximum Relative increase in LAI" unit="http://www.wurvoc.org/vocabularies/om-1.8/reciprocal_day">0.01892</parameter>
+    <parameter id="TDWI" description="Initial total crop dry weight" unit="http://www.wurvoc.org/vocabularies/om-1.8/gram_per_square_metre">16.2</parameter>
+    <parameter id="RGRLAI" description="Maximum Relative increase in LAI" unit="http://www.wurvoc.org/vocabularies/om-1.8/reciprocal_day">0.016</parameter>
 
     <!-- Green area -->
     <parameter id="SLATableDVS" description="DVS for specific leaf area" unit="http://www.wurvoc.org/vocabularies/om-1.8/one">
@@ -62,8 +62,8 @@
       <value>0.0122</value>
       <value>0.0121</value> 
       <value>0.0125</value> 
-      <value>0.0109</value> 
-      <value>0.0107</value> 
+      <value>0.0105</value> 
+      <value>0.007</value> 
       <value>0.0093</value>
       <value>0.0093</value>
     </parameter>
@@ -257,7 +257,7 @@
       <value>0.050</value> 
     </parameter>
 
-    <parameter id="RDRSHM" description="rel. death rate of leaves due to shading (above LAICR)" unit="http://www.wurvoc.org/vocabularies/om-1.8/reciprocal_day">0.020</parameter>
+    <parameter id="RDRSHM" description="rel. death rate of leaves due to shading (above LAICR)" unit="http://www.wurvoc.org/vocabularies/om-1.8/reciprocal_day">0.005</parameter>
     <parameter id="RDRRootsTableDVS" description="DVS for relative death rate of stems" unit="http://www.wurvoc.org/vocabularies/om-1.8/one">
       <value>0</value>
       <value>1.5</value>
@@ -294,7 +294,7 @@
     <parameter id="MaximalSeminalRootLengthPerDay">0.037</parameter>  
     <parameter id="RDMCR" description="Maximum rooting depth" unit="http://www.wurvoc.org/vocabularies/om-1.8/metre">1.2</parameter>     
     <parameter id="DVSDR" description="development stage above which death of roots and stems starts" unit="http://www.wurvoc.org/vocabularies/om-1.8/one">1.0</parameter>
-    <parameter id="DVSDLT" description="development stage above which death of leaves starts in dependence of mean daily temperature" unit="http://www.wurvoc.org/vocabularies/om-1.8/one">1.2</parameter>
+    <parameter id="DVSDLT" description="development stage above which death of leaves starts in dependence of mean daily temperature" unit="http://www.wurvoc.org/vocabularies/om-1.8/one">1.4</parameter>
 
     <!-- Nutrient (N-P-K) use -->
     <parameter id="RDRNS" description="max. relative death rate of leaves due to nutrient (N-P-K) stress" unit="http://www.wurvoc.org/vocabularies/om-1.8/reciprocal_day">0.002</parameter>

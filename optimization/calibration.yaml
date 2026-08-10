@@ -101,7 +101,6 @@ targets:
       write. The optimized values are recorded in optimized_baseline.json before
       the first change and diffed on every iteration.
     frozen: []
-
     subset:
       n_locations: 150
       year_start: 1995
@@ -261,18 +260,18 @@ targets:
     # decision point, not a sample, so wall time per iteration matters more than
     # the last bit of spatial coverage. Override per invocation with --locations.
     subset:
-      n_locations: 150
+      n_locations: 400
       year_start: null
       year_end: null
 
     stopping:
-      max_iterations: 25
+      max_iterations: 100
       # Below this the DVS-binned RMSE is inside the noise of the GLASS retrievals.
-      target_objective: 0.45
+      target_objective: 0.15
       # An iteration counts as an improvement only if it beats the best by this.
       min_improvement: 0.01
       # Stop after this many consecutive non-improving iterations.
-      patience: 5
+      patience: 20
 
     parameters:
       RGRLAI:
@@ -281,7 +280,7 @@ targets:
         mode: relative
         factor: [0.5, 2.0]
         clip: [0.0005, 0.06]
-        precision: 5
+        precision: 3
         controls: [early_growth, rise_rate]
         meaning: >-
           Maximum relative growth rate of LAI during the exponential (juvenile)
@@ -294,7 +293,7 @@ targets:
         type: float
         mode: relative
         factor: [0.6, 1.5]
-        clip: [5.0, 400.0]
+        clip: [5.0, 25.0]
         precision: 2
         controls: [emergence_level]
         meaning: >-
@@ -489,15 +488,15 @@ targets:
     frozen_exclude: [StemsPartitioningTableFraction]
 
     subset:
-      n_locations: 150
+      n_locations: 400
       year_start: 1995
       year_end: 2023
 
     stopping:
-      max_iterations: 25
-      target_objective: 0.6
-      min_improvement: 0.02
-      patience: 5
+      max_iterations: 100
+      target_objective: 0.5
+      min_improvement: 0.01
+      patience: 20
 
     parameters:
       RUETableRUE:
