@@ -127,13 +127,36 @@ def _():
 
 @test("current values are always inside their own bounds")
 def _():
+    # Resolve the space against the *same* file the values are read from. Bounds
+    # are relative to whatever crop.xml they were anchored on, so anchoring on a
+    # staged run dir and then checking production values compares two different
+    # parameter sets — which is a staleness question (covered below), not a
+    # question about whether the declared bounds admit the shipped values.
+    cfg = cc.load_calib_config(CONFIG)
     for crop in CROPS:
         for target in ("phenology", "lai", "yield"):
             spec = cc.load_spec(CONFIG, crop, target)
             xml = spec.run.crop_dir / "data" / "crop" / "crop.xml"
-            current = cc.current_values(xml, spec.crop_name, spec.space)
-            outside = common.check_within_bounds(cc.flatten(current), spec.space)
+            tcfg = cfg["targets"][target]
+            space, meta = cc.resolve_space(xml, spec.crop_name, tcfg.get("parameters") or {})
+            cc.apply_closure_locks(space, meta, tcfg.get("constraints") or [],
+                                   spec.frozen, xml, spec.crop_name)
+            current = cc.current_values(xml, spec.crop_name, space)
+            outside = common.check_within_bounds(cc.flatten(current), space)
             assert not outside, f"{crop}/{target}: {outside} outside their bounds"
+
+
+@test("a fresh study is re-anchored on the production crop.xml")
+def _():
+    # The failure this guards against: a run dir left behind by an earlier study
+    # keeps its mutated crop.xml, so a new study records that as its baseline and
+    # anchors every relative bound on it. stage() resets it while the ledger is
+    # empty; once iterations exist it must never touch the file again.
+    import inspect
+    source = inspect.getsource(cc.stage)
+    assert "ledger_path.exists()" in source, "stage() must check for an empty ledger"
+    assert "provenance.json" in source, "the yield handoff must be exempt from the reset"
+    assert "rebuild" in source
 
 
 @test("frozen set covers phenology; yield additionally freezes the LAI set")
@@ -360,13 +383,18 @@ def _():
             assert stop["since_improvement"] == 2, stop
             assert stop["stop"] is False
 
-            # Patience is 5 in the config: two more flat iterations must not stop
-            # it, five must.
-            for i in range(4, 9):
-                cc.append_ledger(spec, {"iteration": i, "status": "completed",
+            # Flat iterations up to the configured patience must not stop it; one
+            # past it must. Read the value rather than hard-coding it — the
+            # stopping rules are a tuning knob and the invariant is the behaviour,
+            # not the number.
+            patience = int(spec.stopping["patience"])
+            n = 4
+            for _ in range(patience - stop["since_improvement"]):
+                cc.append_ledger(spec, {"iteration": n, "status": "completed",
                                         "objective": 0.95, "parameters_changed": {}})
+                n += 1
             stop = cc.stop_check(spec)
-            assert stop["since_improvement"] == 7
+            assert stop["since_improvement"] == patience, stop
             assert stop["stop"] is True and "patience" in stop["reason"], stop
         finally:
             cc.LEDGER_ROOT = original

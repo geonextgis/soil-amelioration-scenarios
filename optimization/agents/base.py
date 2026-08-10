@@ -146,10 +146,17 @@ def _tidy(value, digits: int = 6):
 
 
 def render_parameters(rows: list[dict]) -> str:
-    out = []
+    out, blocked = [], []
     for row in rows:
         if not row.get("present"):
-            out.append(f"  {row['parameter']}  — not present for this crop, cannot be changed")
+            blocked.append(f"  {row['parameter']} — not present for this crop")
+            continue
+        # A parameter with no movable element at all must not be offered. Listing
+        # it separately, with the reason, is what stops an agent from spending its
+        # whole repair budget proposing changes that cannot pass.
+        if row.get("movable") is False:
+            reason = row.get("locked_reason") or "its bounds are fixed for this crop"
+            blocked.append(f"  {row['parameter']} — CANNOT BE CHANGED: {reason}")
             continue
         flags = []
         if row.get("affects_lai"):
@@ -163,7 +170,16 @@ def render_parameters(rows: list[dict]) -> str:
                    else "      bounds\n" + _wrap(bounds, indent="        "))
         out.append(f"      controls {', '.join(row.get('controls') or []) or '-'}"
                    + (f"   [{'; '.join(flags)}]" if flags else ""))
+        if row.get("immovable_indices"):
+            out.append(f"      FIXED elements (do not propose these indices): "
+                       f"{row['immovable_indices']}"
+                       + (f" — {row['locked_reason']}" if row.get("locked_reason") else ""))
         out.append(_wrap(row.get("meaning", "")))
+
+    if blocked:
+        out.append("")
+        out.append("  Not available to you for this crop — do not propose them:")
+        out.extend(blocked)
     return "\n".join(out)
 
 

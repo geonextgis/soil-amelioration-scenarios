@@ -522,6 +522,88 @@ def validate(proposal: dict, current: dict, space: dict, meta: dict,
 
 
 # ---------------------------------------------------------------------------
+# Closure locks
+# ---------------------------------------------------------------------------
+def apply_closure_locks(space: dict, meta: dict, constraints: list, frozen: list[str],
+                        xml_path: Path, crop_name: str) -> dict:
+    """Pin table elements that a closure constraint makes mathematically immovable.
+
+    A ``partition_sum`` rule says leaves + stems + storage organs must stay at 1 at
+    every development stage. An element can therefore only move if *some other
+    member of the group* can move at the same stage to absorb the difference.
+
+    Winter wheat is the case that forced this. Its above-ground partitioning is a
+    step function — everything to stems until DVS 0.95, everything to the storage
+    organ from DVS 1.0 on — so at every node past anthesis leaves and stems are
+    structural zeros, already pinned at [0, 0]. Storage organs sit at 1.0 with a
+    nominal range of [0.7, 1], which *looks* adjustable and is not: there is
+    nothing left to take the other 0.3.
+
+    Without this, an agent is handed a parameter it cannot legally change, and
+    every proposal it makes is correctly rejected by the closure rule. It has no
+    way to learn that from the rejection, so it burns the whole repair budget
+    rediscovering the same wall. Collapsing the bounds tells it the truth up
+    front.
+
+    A member counts as movable at a node only if it is in *this target's* space
+    (a frozen parameter cannot absorb anything either) and its bounds there are
+    non-degenerate. Returns ``{parameter: [locked indices]}``.
+    """
+    root = crop_root(xml_path)
+    multi = space.get("multi_value_params") or {}
+    frozen_set = set(frozen or [])
+    locks: dict[str, list[int]] = {}
+
+    def movable(pid: str, i: int) -> bool:
+        if pid in frozen_set or pid not in multi:
+            return False
+        values = multi[pid]["values"]
+        return i < len(values) and (values[i]["high"] - values[i]["low"]) > ZERO
+
+    for rule in constraints or []:
+        if rule.get("type") != "partition_sum":
+            continue
+        tables = rule.get("tables") or []
+        members = [f"{t}Fraction" for t in tables]
+        grids = [read_param(root, crop_name, f"{t}DVS") for t in tables]
+
+        # Only the shared-grid case is decidable element by element. When the
+        # members sit on different DVS grids (spring barley), a change to any node
+        # of one table moves the interpolated curve over a whole interval, so
+        # "which node could compensate" has no clean answer — leave those alone
+        # rather than over-lock and hide a legitimate lever.
+        if any(g is None for g in grids) or len({tuple(g) for g in grids}) != 1:
+            continue
+
+        for pid in members:
+            if pid not in multi:
+                continue
+            for i in range(len(grids[0])):
+                if not movable(pid, i):
+                    continue
+                if any(movable(other, i) for other in members if other != pid):
+                    continue
+                # Nothing else can absorb a change here: pin it at its current value.
+                current = read_param(root, crop_name, pid)
+                value = float(current[i])
+                multi[pid]["values"][i] = {"low": value, "high": value}
+                locks.setdefault(pid, []).append(i)
+
+    for pid, indices in locks.items():
+        info = meta.get(pid)
+        if info is None:
+            continue
+        info["locked_indices"] = indices
+        info["locked_reason"] = (
+            "no other member of the above-ground partitioning group can move at "
+            "these development stages, so the closure constraint fixes them")
+        values = multi[pid]["values"]
+        info["movable"] = len(indices) < len(values)
+
+    return locks
+
+
+# ---------------------------------------------------------------------------
 # Freeze guard
 # ---------------------------------------------------------------------------
 def frozen_ids(cfg: dict, target_cfg: dict) -> list[str]:
@@ -699,13 +781,16 @@ def load_spec(config_path: Path, crop: str, target: str, device: str = "cluster"
     # to the production one — which is exactly what staging will copy in.
     xml_for_space = run.crop_xml if run.crop_xml.exists() else crop_dir / "data" / "crop" / "crop.xml"
     space, meta = resolve_space(xml_for_space, run.crop_name, tcfg.get("parameters") or {})
+    frozen = frozen_ids(cfg, tcfg)
+    constraints = tcfg.get("constraints") or []
+    apply_closure_locks(space, meta, constraints, frozen, xml_for_space, run.crop_name)
     run = dataclasses.replace(run, parameters=space)
 
     return CalibSpec(
         run=run, cfg=cfg, target=target, target_cfg=tcfg,
         space=space, meta=meta,
-        frozen=frozen_ids(cfg, tcfg),
-        constraints=tcfg.get("constraints") or [],
+        frozen=frozen,
+        constraints=constraints,
     )
 
 
@@ -718,6 +803,8 @@ def refresh_space(spec: CalibSpec) -> CalibSpec:
     """
     space, meta = resolve_space(spec.crop_xml, spec.crop_name,
                                 spec.target_cfg.get("parameters") or {})
+    apply_closure_locks(space, meta, spec.constraints, spec.frozen,
+                        spec.crop_xml, spec.crop_name)
     spec.space, spec.meta = space, meta
     spec.run = dataclasses.replace(spec.run, parameters=space)
     return spec
@@ -807,8 +894,44 @@ def objective_for(target: str):
 # Misc
 # ---------------------------------------------------------------------------
 def stage(spec: CalibSpec, rebuild: bool = False) -> dict:
-    """Stage the isolated run dir (``common.build_run_dir``) and anchor the space."""
+    """Stage the isolated run dir (``common.build_run_dir``) and anchor the space.
+
+    A study that has not started yet is re-anchored on the production ``crop.xml``.
+    ``build_run_dir`` deliberately leaves an existing ``data/crop/`` alone — it has
+    to, because iteration N must continue from what iteration N-1 wrote. But that
+    also means a run dir left behind by an *earlier* study keeps its mutated
+    parameters forever, so a fresh study would record someone else's endpoint as
+    its baseline and anchor every relative bound on it. An empty ledger means
+    nothing has been recorded yet, so there is nothing to preserve.
+
+    The handoff is the one exception: it writes the LAI-calibrated crop.xml into
+    the yield run dir *before* the yield ledger exists, and ``provenance.json``
+    is how that intent is marked.
+    """
+    n_recorded = len(read_ledger(spec))
+    if rebuild and n_recorded:
+        # --rebuild re-copies crop.xml from production, so iteration N+1 would
+        # start from the production values rather than from what iteration N
+        # wrote. The ledger would keep counting as though nothing happened, and
+        # the objective series would have an unexplained discontinuity in it.
+        print(f"  WARNING: --rebuild resets crop.xml to the production file, but "
+              f"{spec.crop}/{spec.target} already has {n_recorded} recorded "
+              f"iteration(s).\n"
+              f"           The next iteration will NOT continue from the last one. "
+              f"If you meant to start over,\n"
+              f"           archive the ledger first: mv {spec.ledger_dir} "
+              f"{spec.ledger_dir}.bak")
+
     info = common.build_run_dir(spec.run, rebuild=rebuild)
+
+    production = spec.run.crop_dir / "data" / "crop" / "crop.xml"
+    fresh = not spec.ledger_path.exists() and not (spec.ledger_dir / "provenance.json").exists()
+    if not rebuild and fresh and production.exists() and spec.crop_xml.exists():
+        if production.read_bytes() != spec.crop_xml.read_bytes():
+            shutil.copyfile(production, spec.crop_xml)
+            print(f"  note: no iterations recorded for {spec.crop}/{spec.target} yet — "
+                  f"reset the run-dir crop.xml from {production}")
+
     refresh_space(spec)
     return info
 
@@ -864,12 +987,26 @@ def describe_space(spec: CalibSpec) -> list[dict]:
             bounds = [list(limits.get(f"{pid}_{i}", (None, None))) for i in range(len(value))]
         else:
             bounds = list(limits.get(pid, (None, None)))
+        # An element whose bounds have collapsed cannot move — either a structural
+        # zero or a closure lock. Reporting it as changeable is what sends an agent
+        # into a repair loop it cannot win.
+        if isinstance(bounds[0], list):
+            immovable = [i for i, b in enumerate(bounds)
+                         if b[0] is not None and abs(b[1] - b[0]) <= ZERO]
+            movable = len(immovable) < len(bounds)
+        else:
+            immovable = []
+            movable = bounds[0] is None or abs(bounds[1] - bounds[0]) > ZERO
+
         rows.append({
             "parameter": pid, "present": True, "kind": info.get("kind", "scalar"),
             "value": value, "bounds": bounds,
             "controls": info.get("controls", []),
             "affects_lai": bool(info.get("affects_lai", False)),
             "coupled_with": info.get("coupled_with", []),
+            "movable": movable,
+            "immovable_indices": immovable,
+            "locked_reason": info.get("locked_reason"),
             "meaning": " ".join((info.get("meaning") or "").split()),
         })
     return rows

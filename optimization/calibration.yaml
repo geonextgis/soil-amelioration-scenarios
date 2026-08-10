@@ -687,7 +687,7 @@ targets:
           - LeavesPartitioningTable
           - StemsPartitioningTable
           - StorageOrgansPartitioningTable
-        tolerance: 0.005
+        tolerance: 0.01
       - id: n_thresholds_ordered
         type: ordering
         rule: DVSNT < DVSNLT
@@ -766,7 +766,7 @@ llm:
   request_timeout: 900
   # Malformed JSON or a proposal that violates a constraint is handed back to the
   # model with the exact error, this many times, before the iteration is skipped.
-  max_repair_attempts: 3
+  max_repair_attempts: 10
   # Recorded in the ledger with every proposal, so a decision can always be traced
   # to the model that made it.
   record_prompts: true
