@@ -1,0 +1,41 @@
+{
+  "handoff_at": "2026-08-10T10:30:38+00:00",
+  "from": {
+    "target": "lai",
+    "crop_xml": "/data01/FDS/halder/soil-amelioration-scenarios/optimization/calibration/winter_wheat__lai/best_crop.xml",
+    "iteration": 2,
+    "objective": 0.7848074093320392
+  },
+  "frozen_digest": "006369ecee867c0a385cd83d5784aabb70ceccb4fcbe1ede61dbb14cc342a35b",
+  "frozen_parameters": [
+    "DVSDLT",
+    "DVSEND",
+    "DVSI",
+    "IDSL",
+    "KDIFTableDVS",
+    "LAICR",
+    "LeavesPartitioningTableDVS",
+    "LeavesPartitioningTableFraction",
+    "PhotoperiodTableFactor",
+    "PhotoperiodTableHour",
+    "RDRL",
+    "RDRLeavesTableRelativeRate",
+    "RDRNS",
+    "RDRSHM",
+    "RGRLAI",
+    "RUETableDVS",
+    "RootsPartitioningTableDVS",
+    "SLATableDVS",
+    "SLATableSLA",
+    "StemsPartitioningTableDVS",
+    "StorageOrgansPartitioningTableDVS",
+    "TBASEM",
+    "TDWI",
+    "TEFFMX",
+    "TSUM1",
+    "TSUM2",
+    "TSUMEM",
+    "TsumIncrementTableMeanTemp",
+    "TsumIncrementTableRate"
+  ]
+}

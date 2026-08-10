@@ -9,7 +9,10 @@
 #
 # Experiment matrix = 17 climate scenarios x 5 soil scenarios = 85 per crop.
 
-repo_root: /beegfs/halder/GITHUB/RESEARCH/soil-amelioration-scenarios
+# Repo root. `auto` derives it from this file's location, so the checkout can be
+# moved or cloned anywhere without editing config. Override with an absolute path
+# here or via the SOIL_SCENARIOS_ROOT env var.
+repo_root: auto
 
 paths:
   point_grid: data/raw/point_to_nearest_grid.csv # PointID -> nearest grid cell

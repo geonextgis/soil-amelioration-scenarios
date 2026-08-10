@@ -1,0 +1,7 @@
+{
+  "crop_name": "winter_wheat",
+  "parameters": {},
+  "digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+  "source": "/data01/FDS/halder/soil-amelioration-scenarios/simplace/winter_wheat/runs_optim/calib_phenology/data/crop/crop.xml",
+  "taken_at": "2026-08-10T13:56:09+00:00"
+}

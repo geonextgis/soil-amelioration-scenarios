@@ -45,6 +45,33 @@ from pathlib import Path
 import pandas as pd
 import yaml
 
+# Repo root derived from this file's location (orchestration/generate.py), so the
+# checkout can be moved or cloned anywhere without editing config. Overridable via
+# the SOIL_SCENARIOS_ROOT env var or an explicit `repo_root:` in experiments.yaml.
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def resolve_repo_root(cfg: dict) -> Path:
+    """Repo root: explicit config > SOIL_SCENARIOS_ROOT env var > this file's location.
+
+    A stale absolute `repo_root` is the one failure that does not announce itself —
+    if an older copy of the checkout still exists, every run silently reads and
+    writes *there*. So an explicitly configured root must actually look like this
+    repo, or we refuse it.
+    """
+    raw = cfg.get("repo_root") or os.environ.get("SOIL_SCENARIOS_ROOT") or "auto"
+    if str(raw).strip().lower() in ("", "auto", "none"):
+        return REPO_ROOT
+    root = Path(raw).expanduser().resolve()
+    if not (root / "simplace").is_dir():
+        raise SystemExit(
+            f"configured repo_root does not look like this repo: {root}\n"
+            f"  (no simplace/ inside it).  Set `repo_root: auto` in experiments.yaml "
+            f"to derive it from the checkout location ({REPO_ROOT})."
+        )
+    return root
+
+
 # --- DWD weather contract (baseline) ---------------------------------------
 DWD_WEATHER = "${_DATADIR_}/${vRow}/daily_mean_RES1_C${vColumn}R${vRow}.csv.gz"
 DWD_DIVIDER = None  # whitespace/tab -> SIMPLACE self-closing <divider />
@@ -213,7 +240,7 @@ def link_or_replace(src: Path, dst: Path) -> None:
 
 def generate(crop: str, climate: Climate, soil: str, cfg: dict,
              dry_run: bool = False) -> dict:
-    repo = Path(cfg["repo_root"])
+    repo = resolve_repo_root(cfg)
     crop_dir = repo / "simplace" / crop
     exp_id = f"{climate.id}__{soil}"
     run_dir = crop_dir / cfg["paths"]["runs_subdir"] / exp_id
@@ -361,7 +388,7 @@ def main() -> int:
 
     if not args.dry_run:
         # Emit a single reviewable submit script (one runner invocation per experiment).
-        repo = Path(cfg["repo_root"])
+        repo = resolve_repo_root(cfg)
         runs_root = repo / "simplace" / crops[0] / cfg["paths"]["runs_subdir"]
         tag = "_".join(sorted(set(climates)))[:40] if len(climates) <= 3 else "batch"
         script = runs_root.parent.parent / "runs_submit" / f"submit_{tag}.sh"

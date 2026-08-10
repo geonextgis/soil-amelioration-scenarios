@@ -1,0 +1,261 @@
+{
+  "objective": 0.7858350653899153,
+  "metrics": {
+    "RMSE LAI (DVS-binned)": 0.7858,
+    "bias LAI": -0.3136,
+    "RMSE LAI (raw daily)": 0.7462,
+    "DVS bin x year groups": 30,
+    "matched daily pairs": 211,
+    "locations": 8
+  },
+  "diagnostics": {
+    "overall": {
+      "n": 211,
+      "RMSE": 0.7462,
+      "MAE": 0.5671,
+      "bias": -0.1013,
+      "R2": 0.5175,
+      "nRMSE_pct": 36.2353,
+      "EF": 0.4982
+    },
+    "n_pairs": 211,
+    "n_locations": 8,
+    "years": [
+      2017,
+      2018,
+      2019,
+      2020,
+      2021
+    ],
+    "by_dvs_bin": [
+      {
+        "dvs_bin": "(-0.001, 0.25]",
+        "n": 4.0,
+        "obs_mean": 0.6,
+        "sim_mean": 0.9426,
+        "bias": 0.3426,
+        "rmse": 0.3496,
+        "rel_bias_pct": 57.0943
+      },
+      {
+        "dvs_bin": "(0.25, 0.5]",
+        "n": 51.0,
+        "obs_mean": 1.0431,
+        "sim_mean": 1.1593,
+        "bias": 0.1162,
+        "rmse": 0.515,
+        "rel_bias_pct": 11.1371
+      },
+      {
+        "dvs_bin": "(0.5, 1.0]",
+        "n": 93.0,
+        "obs_mean": 2.2957,
+        "sim_mean": 2.2717,
+        "bias": -0.024,
+        "rmse": 0.6549,
+        "rel_bias_pct": -1.0438
+      },
+      {
+        "dvs_bin": "(1.0, 1.25]",
+        "n": 16.0,
+        "obs_mean": 3.4562,
+        "sim_mean": 2.896,
+        "bias": -0.5603,
+        "rmse": 0.9919,
+        "rel_bias_pct": -16.211
+      },
+      {
+        "dvs_bin": "(1.25, 1.5]",
+        "n": 15.0,
+        "obs_mean": 3.0,
+        "sim_mean": 2.4827,
+        "bias": -0.5173,
+        "rmse": 1.1654,
+        "rel_bias_pct": -17.2441
+      },
+      {
+        "dvs_bin": "(1.5, 1.75]",
+        "n": 16.0,
+        "obs_mean": 2.3375,
+        "sim_mean": 1.9614,
+        "bias": -0.3761,
+        "rmse": 1.0324,
+        "rel_bias_pct": -16.0878
+      },
+      {
+        "dvs_bin": "(1.75, 2.0]",
+        "n": 15.0,
+        "obs_mean": 1.7067,
+        "sim_mean": 1.5171,
+        "bias": -0.1896,
+        "rmse": 0.803,
+        "rel_bias_pct": -11.1083
+      }
+    ],
+    "curve_shape": {
+      "n_seasons": 8,
+      "peak_lai": {
+        "obs_median": 3.75,
+        "sim_median": 3.2863,
+        "median_diff": -0.5637,
+        "iqr_diff": [
+          -0.9784,
+          0.3595
+        ],
+        "n": 8,
+        "unit": "m2/m2"
+      },
+      "peak_timing": {
+        "obs_median": 149.0,
+        "sim_median": 141.0,
+        "median_diff": 0.0,
+        "iqr_diff": [
+          -8.0,
+          10.0
+        ],
+        "n": 8,
+        "unit": "DOY"
+      },
+      "peak_stage": {
+        "obs_median": 0.9224,
+        "sim_median": 0.9371,
+        "median_diff": 0.0,
+        "iqr_diff": [
+          -0.0959,
+          0.1049
+        ],
+        "n": 8,
+        "unit": "DVS"
+      },
+      "early_canopy": {
+        "obs_median": 0.581,
+        "sim_median": 1.0034,
+        "median_diff": 0.4224,
+        "iqr_diff": [
+          0.3784,
+          0.4664
+        ],
+        "n": 2,
+        "unit": "m2/m2 (DVS<=0.3)"
+      },
+      "rise_rate": {
+        "obs_median": 0.0183,
+        "sim_median": 0.0152,
+        "median_diff": -0.0031,
+        "iqr_diff": [
+          -0.0054,
+          0.0032
+        ],
+        "n": 8,
+        "unit": "LAI/day"
+      },
+      "decline_rate": {
+        "obs_median": -0.0391,
+        "sim_median": -0.0344,
+        "median_diff": 0.0019,
+        "iqr_diff": [
+          -0.0044,
+          0.0126
+        ],
+        "n": 8,
+        "unit": "LAI/day"
+      },
+      "plateau_duration": {
+        "obs_median": 56.0,
+        "sim_median": 44.0,
+        "median_diff": -8.0,
+        "iqr_diff": [
+          -24.0,
+          8.0
+        ],
+        "n": 8,
+        "unit": "days at >=80% of peak"
+      },
+      "seasons_with_sign_consistent_residual_pct": 12.5,
+      "season_bias_median": -0.1422,
+      "season_bias_iqr": [
+        -0.3533,
+        0.2055
+      ]
+    },
+    "residual_structure": {
+      "mean_residual": -0.1013,
+      "residual_sd": 0.741,
+      "residual_by_month": {
+        "1": {
+          "mean": 0.1173,
+          "n": 32
+        },
+        "2": {
+          "mean": 0.0921,
+          "n": 32
+        },
+        "3": {
+          "mean": 0.0318,
+          "n": 32
+        },
+        "4": {
+          "mean": -0.3104,
+          "n": 25
+        },
+        "5": {
+          "mean": -0.3383,
+          "n": 31
+        },
+        "6": {
+          "mean": -0.4026,
+          "n": 32
+        },
+        "7": {
+          "mean": -0.0228,
+          "n": 24
+        },
+        "8": {
+          "mean": 0.8606,
+          "n": 3
+        }
+      },
+      "residual_vs_dvs_slope": -0.4178,
+      "residual_vs_obs_slope": -0.4101,
+      "location_bias_spread_iqr": [
+        -0.3533,
+        0.2055
+      ],
+      "locations_biased_high_pct": 37.5,
+      "worst_locations": [
+        {
+          "location": 5476,
+          "bias": -0.9592
+        },
+        {
+          "location": 210,
+          "bias": -0.7103
+        },
+        {
+          "location": 7393,
+          "bias": 0.6976
+        },
+        {
+          "location": 7182,
+          "bias": 0.3195
+        },
+        {
+          "location": 1876,
+          "bias": -0.2343
+        },
+        {
+          "location": 0,
+          "bias": 0.1675
+        },
+        {
+          "location": 3746,
+          "bias": -0.1487
+        },
+        {
+          "location": 3535,
+          "bias": -0.1358
+        }
+      ]
+    }
+  }
+}

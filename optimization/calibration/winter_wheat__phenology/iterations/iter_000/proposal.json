@@ -1,0 +1,10 @@
+{
+  "iteration": 0,
+  "proposal": {},
+  "normalised": {},
+  "changed": {},
+  "reason": "validation of the already-optimized phenology parameters",
+  "hypothesis": "",
+  "reasoning": "[phenology agent \u00b7 mock via mock]\nAnalysis: No parameter change. Scores the optimized set against the observations and reports where the residual is structured.",
+  "expected_effect": ""
+}

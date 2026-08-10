@@ -1,0 +1,13 @@
+{
+  "crop": "winter_wheat",
+  "target": "lai",
+  "updated": "2026-08-10T10:28:57+00:00",
+  "n_iterations": 3,
+  "last_iteration": 2,
+  "last_status": "completed",
+  "best_iteration": 2,
+  "best_objective": 0.7848074093320392,
+  "frozen_digest": "3db403b88031b18f2327ea8a3b8b0579fc34c4e3380e4a95519ff329ca08dc31",
+  "run_dir": "/data01/FDS/halder/soil-amelioration-scenarios/simplace/winter_wheat/runs_optim/calib_lai",
+  "created": "2026-08-10T10:19:58+00:00"
+}

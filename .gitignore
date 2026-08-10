@@ -260,11 +260,23 @@ submit.log
 slurm-*.out
 simplace-*.out
 
-# --- Optimization runtime state ---------------------------------------------
-# Optuna study DBs, per-trial crop.xml snapshots, losses and run logs.
-optimization/studies/
-optimization/results/
+# --- Calibration runtime state ------------------------------------------------
 *.db
+
+# --- Agentic calibration ledger ----------------------------------------------
+# The ledger IS the reproducibility record, so it is tracked: ledger.jsonl,
+# state.json, the freeze snapshot, optimized_baseline.json (the preserved
+# pre-calibration phenology), and proposal.json / metrics.json / crop.xml per
+# iteration. Only the bulky, fully re-derivable artifacts are ignored — the
+# joined obs/sim frames and the figures can be regenerated from the recorded
+# crop.xml, and the logs belong to a run that no longer exists.
+optimization/calibration/*/iterations/*/pairs.csv.gz
+optimization/calibration/*/iterations/*/season_shape.csv
+optimization/calibration/*/iterations/*/diagnostics/
+optimization/calibration/*/iterations/*/simplace.log
+optimization/calibration/*/lai_regression/
+optimization/calibration/*/adhoc/
+optimization/calibration/*/history.png
 
 # --- Large / derived datasets ------------------------------------------------
 data/raw/GLASS_LAI/
@@ -296,6 +308,49 @@ unused/simplace/winter_wheat_reference/
 *.tar.gz
 *.tgz
 *.7z
+
+# --- Binary data & model artefacts (defensive, by extension) -----------------
+# The directory rules above already cover today's data. These extension rules are
+# the safety net for data that lands somewhere new: they are what stops a stray
+# raster or checkpoint from being committed before anyone notices.
+# NOTE: *.csv and *.csv.gz are deliberately NOT here — the tracked model inputs
+# (soil, management, weather) use exactly those.
+#
+# Gridded / scientific formats
+*.nc
+*.nc4
+*.hdf
+*.hdf5
+*.h5
+*.grib
+*.grb
+*.tif
+*.tiff
+*.img
+# Geospatial vector (shapefile + sidecars, GeoPackage)
+*.gpkg
+*.shp
+*.shx
+*.dbf
+*.prj
+*.cpg
+# Serialized frames / arrays
+*.parquet
+*.feather
+*.npy
+*.npz
+*.pkl
+*.pickle
+# Model checkpoints
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.joblib
+*.safetensors
+# Local databases
+*.sqlite
+*.sqlite3
 
 # --- Editors / local tooling --------------------------------------------------
 .ipynb_checkpoints/

@@ -1,0 +1,13 @@
+{
+  "crop": "winter_wheat",
+  "target": "phenology",
+  "updated": "2026-08-10T13:58:34+00:00",
+  "n_iterations": 1,
+  "last_iteration": 0,
+  "last_status": "completed",
+  "best_iteration": 0,
+  "best_objective": 18.193668923675144,
+  "frozen_digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+  "run_dir": "/data01/FDS/halder/soil-amelioration-scenarios/simplace/winter_wheat/runs_optim/calib_phenology",
+  "created": "2026-08-10T13:58:34+00:00"
+}

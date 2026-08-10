@@ -1,17 +1,20 @@
-# Configuration for the single-trial SIMPLACE calibration scripts.
+# MODEL + RUN configuration for calibration.
 #
-#   optimization/optimize_phenology.py
-#   optimization/optimize_lai.py
-#   optimization/optimize_yield.py
+# This file answers "how is a calibration run set up and executed" — repo root,
+# climate forcing, SLURM, which input tables get staged, which project table and
+# subset each target uses, and the per-crop facts (crop_name, dm_fraction).
 #
-# Each script run = ONE trial (one parameter draw -> one SIMPLACE run -> one loss).
-# Trial history lives in optimization/studies/<crop>__<target>.db, so repeated runs
-# (e.g. under Claude Loop) keep improving instead of restarting from scratch.
+# It says nothing about *which parameters to change*. That is calibration.yaml,
+# which `extends:` this file so the cluster settings and the per-crop facts live
+# in exactly one place.
 #
-# Nothing here is read by the existing simplace/<crop>/config.yaml pipeline; the
-# calibration runs are fully isolated under simplace/<crop>/runs_optim/<target>/.
+# Nothing here is read by the scenario pipeline (simplace/<crop>/config.yaml);
+# calibration runs are fully isolated under simplace/<crop>/runs_optim/.
 
-repo_root: /beegfs/halder/GITHUB/RESEARCH/soil-amelioration-scenarios
+# Repo root. `auto` derives it from this file's location, so the checkout can be
+# moved or cloned anywhere without editing config. Override with an absolute path
+# here or via the SOIL_SCENARIOS_ROOT env var.
+repo_root: auto
 
 # Climate driving the calibration runs (DWD observations = the baseline source).
 climate:
@@ -21,17 +24,9 @@ slurm:
   singularity_image: /beegfs/common/singularity/simplace/simplace_5.0-3897.sif
   partition: compute
   walltime: "03:00:00"
-  num_nodes: 30
+  num_nodes: 50
   num_tasks_per_node: 8
   debug: false
-
-optuna:
-  sampler: tpe # tpe | random
-  seed: 42
-  n_startup_trials: 10 # random draws before TPE starts modelling
-  # The very first trial of a fresh study is the current crop.xml values, so every
-  # later trial has a reference loss to beat.
-  enqueue_baseline: true
 
 # Which input tables get staged into the calibration run dir under the canonical
 # names the solution reads (data/soil/soil.csv, data/management/location.csv,
@@ -48,31 +43,20 @@ input_profiles:
     fertilizer: data/management/fertilizer_{crop}_LAI.csv
 
 # ---------------------------------------------------------------------------
-# Targets. `parameters` uses the same schema as simplace/<crop>/config.yaml.
+# Targets — the RUN definition for each calibration objective: which project
+# table, which input profile, which output namespace, and the default subset.
+#
+# The parameter space, the constraints and the stopping rules for each target
+# live in calibration.yaml, which overrides `exp_name` / `project_csv` /
+# `inputs` / `subset` with its own values. What is here is the fallback and the
+# canonical description of the run itself.
 # ---------------------------------------------------------------------------
 targets:
   phenology:
     exp_name: OPTIM_PHENOLOGY
     project_csv: project/project_{crop}.csv
     inputs: production
-    # Thermal-time drivers only: these move anthesis/maturity without touching growth.
-    parameters:
-      single_value_params:
-        TSUM1:
-          type: int
-          low: 700
-          high: 1500
-        TSUM2:
-          type: int
-          low: 700
-          high: 1500
-        TEFFMX:
-          type: float
-          low: 25.0
-          high: 40.0
-          precision: 2
-      multi_value_params: null
-    # Subset keeps a trial cheap enough to iterate on. null = use everything.
+    # Subset keeps an iteration cheap enough to reason about. null = everything.
     subset:
       n_locations: 300
       year_start: 1995
@@ -85,31 +69,6 @@ targets:
     # the baseline project table, hence the `lai` input profile.
     project_csv: project/project_{crop}_LAI.csv
     inputs: lai
-    parameters:
-      single_value_params:
-        RGRLAI:
-          type: float
-          low: 0.018
-          high: 0.028
-          precision: 5
-        RDRNS:
-          type: float
-          low: 0.002
-          high: 0.05
-          precision: 3
-      multi_value_params:
-        SLATableSLA:
-          type: float
-          values:
-            - { low: 0.008, high: 0.012 } # DVS 0.00  emergence
-            - { low: 0.012, high: 0.020 } # DVS 0.25  tillering
-            - { low: 0.012, high: 0.018 } # DVS 0.50  stem elongation
-            - { low: 0.012, high: 0.018 } # DVS 1.00  anthesis
-            - { low: 0.010, high: 0.018 } # DVS 1.25  grain filling start
-            - { low: 0.010, high: 0.016 } # DVS 1.50  grain filling mid
-            - { low: 0.008, high: 0.014 } # DVS 1.75  grain filling end
-            - { low: 0.008, high: 0.014 } # DVS 2.00  maturity
-          precision: 4
     subset:
       n_locations: 400
       year_start: null
@@ -119,32 +78,9 @@ targets:
     exp_name: OPTIM_YIELD
     project_csv: project/project_{crop}.csv
     inputs: production
-    parameters:
-      single_value_params:
-        YieldAdjustRatio:
-          type: float
-          low: 0.80
-          high: 1.20
-          precision: 2
-        FreshratioStorageOrgan:
-          type: float
-          low: 0.80
-          high: 0.90
-          precision: 2
-      multi_value_params:
-        # Upper bounds sit above the current crop.xml values (4.2, 4.2, 3.2, 1.2)
-        # so the baseline trial is inside the search space.
-        RUETableRUE:
-          type: float
-          values:
-            - { low: 2.0, high: 4.5 } # DVS 0.0  emergence
-            - { low: 2.0, high: 4.5 } # DVS 1.0  anthesis
-            - { low: 1.5, high: 3.5 } # DVS 1.3  mid grain filling
-            - { low: 0.0, high: 1.5 } # DVS 2.0  maturity
-          precision: 2
     subset:
       n_locations: 400
-      year_start: 1995
+      year_start: 1979
       year_end: 2023
 
 # ---------------------------------------------------------------------------

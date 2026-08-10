@@ -1,49 +1,47 @@
 #!/usr/bin/env python
-"""Shared plumbing for the single-trial SIMPLACE calibration scripts.
+"""Model-side plumbing shared by every calibration run.
 
-The three ``optimize_*.py`` scripts each own one thing: the *loss*. Everything
-else — resolving config, staging an isolated calibration run dir, drawing a
-parameter set, editing ``crop.xml``, invoking SIMPLACE, persisting the study,
-reporting — lives here.
+This layer knows how to *run the model and read it back*, and nothing about how
+parameters are chosen:
 
-One script invocation = one trial:
+    stage an isolated run dir -> edit crop.xml -> invoke SIMPLACE -> read out/
 
-    draw params -> write crop.xml -> run SIMPLACE -> read out/ -> loss -> tell study
-
-State lives in ``optimization/studies/<crop>__<target>.db`` (Optuna + SQLite), so
-each invocation resumes the previous history and proposes a *better* parameter
-set. That is what makes the scripts loop-friendly: re-running the same command is
-the whole iteration protocol, no orchestration state to thread through.
+The decision layer sits on top (``calib_common.py`` for the mechanics,
+``calibrate.py`` for one iteration, ``agents/`` for the local-LLM loop). Keeping
+the split means the objective is computed by identical code no matter who
+proposed the parameters.
 
 Isolation contract
 ------------------
 Calibration never touches the production crop inputs. Everything happens under
-``simplace/<crop>/runs_optim/<target>/`` with the mutated ``data/crop/crop.xml``
-as a *copy*; shared read-only inputs are symlinked. So an interrupted or bad
-trial can never corrupt ``simplace/<crop>/data/crop/crop.xml``.
+``simplace/<crop>/runs_optim/<run_subdir>/`` with the mutated
+``data/crop/crop.xml`` as a *copy*; shared read-only inputs are symlinked. So an
+interrupted or failed iteration can never corrupt
+``simplace/<crop>/data/crop/crop.xml``.
 """
 from __future__ import annotations
 
-import argparse
 import copy
-import json
+import os
 import shutil
 import subprocess
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from dataclasses import dataclass
 from glob import glob
 from pathlib import Path
 
 import numpy as np
-import optuna
 import pandas as pd
 import yaml
 from lxml import etree
 
 OPTIM_DIR = Path(__file__).resolve().parent
 DEFAULT_CONFIG = OPTIM_DIR / "config.yaml"
+# Repo root derived from this file's location (optimization/common.py) so the
+# checkout works wherever it lives. See resolve_repo_root() below.
+REPO_ROOT = OPTIM_DIR.parent
 
 # Shared crop inputs that are read-only during calibration -> symlink, never copy.
 SYMLINK_DATA_SUBDIRS = ["slim", "soilcnp"]
@@ -59,7 +57,7 @@ SYMLINK_MANAGEMENT_FILES = ["management.xml", "fertilizer_composition.xml"]
 # ---------------------------------------------------------------------------
 @dataclass
 class RunSpec:
-    """Everything one calibration trial needs, with every path already absolute."""
+    """Everything one model run needs, with every path already absolute."""
 
     crop: str
     crop_name: str
@@ -74,7 +72,6 @@ class RunSpec:
     subset: dict
     mount_data: str
     slurm: dict
-    optuna_cfg: dict
     device: str = "cluster"
     # Dry-matter fraction applied to *observed* yield. Observed potato yield is
     # fresh tuber weight while the model reports dry matter, so comparing them
@@ -100,21 +97,25 @@ class RunSpec:
     def run_config(self) -> Path:
         return self.run_dir / "config.yaml"
 
-    @property
-    def study_name(self) -> str:
-        return f"{self.crop}__{self.target}"
 
-    @property
-    def storage(self) -> str:
-        db = OPTIM_DIR / "studies" / f"{self.study_name}.db"
-        db.parent.mkdir(parents=True, exist_ok=True)
-        return f"sqlite:///{db}"
+def resolve_repo_root(cfg: dict) -> Path:
+    """Repo root: explicit config > SOIL_SCENARIOS_ROOT env var > this file's location.
 
-    @property
-    def results_dir(self) -> Path:
-        d = OPTIM_DIR / "results" / self.study_name
-        d.mkdir(parents=True, exist_ok=True)
-        return d
+    A stale absolute `repo_root` is the one failure that does not announce itself —
+    if an older copy of the checkout still exists, calibration silently stages run
+    dirs and reads crop.xml *there*. So an explicit root must look like this repo.
+    """
+    raw = cfg.get("repo_root") or os.environ.get("SOIL_SCENARIOS_ROOT") or "auto"
+    if str(raw).strip().lower() in ("", "auto", "none"):
+        return REPO_ROOT
+    root = Path(raw).expanduser().resolve()
+    if not (root / "simplace").is_dir():
+        raise SystemExit(
+            f"configured repo_root does not look like this repo: {root}\n"
+            f"  (no simplace/ inside it).  Set `repo_root: auto` in the optimization "
+            f"config to derive it from the checkout location ({REPO_ROOT})."
+        )
+    return root
 
 
 def _merge(base: dict, extra: dict) -> dict:
@@ -136,7 +137,7 @@ def load_spec(config_path: Path, crop: str, target: str, device: str = "cluster"
     crop_cfg = cfg["crops"][crop] or {}
     tcfg = _merge(cfg["targets"][target], (crop_cfg.get("targets") or {}).get(target, {}))
 
-    repo_root = Path(cfg["repo_root"]).resolve()
+    repo_root = resolve_repo_root(cfg)
     crop_dir = repo_root / "simplace" / crop
     if not crop_dir.is_dir():
         raise SystemExit(f"crop dir not found: {crop_dir}")
@@ -177,7 +178,6 @@ def load_spec(config_path: Path, crop: str, target: str, device: str = "cluster"
         subset=tcfg.get("subset") or {},
         mount_data=cfg["climate"]["mount_data"],
         slurm=cfg["slurm"],
-        optuna_cfg=cfg.get("optuna", {}),
         device=device,
         dm_fraction=float(crop_cfg.get("dm_fraction", 1.0)),
     )
@@ -324,25 +324,12 @@ def _crop_params(root, crop_name: str, param_id: str):
     )
 
 
-def read_current_values(xml_path: Path, crop_name: str, space: dict) -> dict:
-    """Current crop.xml values, flattened to Optuna's parameter naming."""
-    root = etree.parse(str(xml_path)).getroot()
-    out: dict[str, float | int] = {}
-
-    for pid, spec in (space.get("single_value_params") or {}).items():
-        for p in _crop_params(root, crop_name, pid):
-            if len(p) == 0 and p.text:
-                out[pid] = int(float(p.text)) if spec["type"] == "int" else float(p.text)
-    for pid, spec in (space.get("multi_value_params") or {}).items():
-        for p in _crop_params(root, crop_name, pid):
-            for i, v in enumerate(p.findall("value")):
-                if i < len(spec["values"]):
-                    out[f"{pid}_{i}"] = int(float(v.text)) if spec["type"] == "int" else float(v.text)
-    return out
-
-
 def bounds_of(space: dict) -> dict[str, tuple[float, float]]:
-    """Flatten a parameter space to {optuna param name: (low, high)}."""
+    """Flatten a parameter space to ``{flat name: (low, high)}``.
+
+    Table elements are addressed as ``<param>_<index>``, matching the flattening
+    used throughout the decision layer (``calib_common.flatten``).
+    """
     out: dict[str, tuple[float, float]] = {}
     for pid, spec in (space.get("single_value_params") or {}).items():
         out[pid] = (spec["low"], spec["high"])
@@ -359,32 +346,8 @@ def check_within_bounds(values: dict, space: dict) -> list[str]:
             if k in limits and not (limits[k][0] <= v <= limits[k][1])]
 
 
-def suggest_parameters(trial: optuna.Trial, space: dict) -> dict:
-    """Draw one parameter set. Returns {param_id: scalar | [values]}."""
-    drawn: dict[str, object] = {}
-
-    for pid, spec in (space.get("single_value_params") or {}).items():
-        if spec["type"] == "int":
-            drawn[pid] = trial.suggest_int(pid, spec["low"], spec["high"])
-        else:
-            drawn[pid] = round(trial.suggest_float(pid, spec["low"], spec["high"]),
-                               spec.get("precision", 4))
-
-    for pid, spec in (space.get("multi_value_params") or {}).items():
-        vals = []
-        for i, b in enumerate(spec["values"]):
-            if spec["type"] == "int":
-                vals.append(trial.suggest_int(f"{pid}_{i}", b["low"], b["high"]))
-            else:
-                vals.append(round(trial.suggest_float(f"{pid}_{i}", b["low"], b["high"]),
-                                  spec.get("precision", 4)))
-        drawn[pid] = vals
-
-    return drawn
-
-
 def apply_parameters(xml_path: Path, crop_name: str, drawn: dict) -> None:
-    """Write a drawn parameter set into the calibration crop.xml."""
+    """Write a parameter set into the calibration crop.xml."""
     tree = etree.parse(str(xml_path))
     root = tree.getroot()
 
@@ -411,18 +374,23 @@ def apply_parameters(xml_path: Path, crop_name: str, drawn: dict) -> None:
 # ---------------------------------------------------------------------------
 # Simulation
 # ---------------------------------------------------------------------------
-def run_simplace(spec: RunSpec, trial_number: int) -> None:
-    """Run SIMPLACE once for the current crop.xml. Blocks until jobs finish."""
-    # Stale per-location outputs from the previous trial would silently blend into
-    # this trial's loss (a location dropped by SLURM keeps its old file), so start
-    # each trial from an empty output dir.
+def run_simplace(spec: RunSpec, iteration: int, log_path: Path | None = None) -> None:
+    """Run SIMPLACE once for the current crop.xml. Blocks until jobs finish.
+
+    ``log_path`` says where the driver's stdout/stderr goes; ``calibrate.py``
+    keeps it beside the iteration it belongs to.
+    """
+    # Stale per-location outputs from the previous iteration would silently blend
+    # into this one's loss (a location dropped by SLURM keeps its old file), so
+    # start each run from an empty output dir.
     for sub in ("daily", "yearly"):
         shutil.rmtree(spec.out_dir / sub, ignore_errors=True)
     spec.out_dir.mkdir(parents=True, exist_ok=True)
 
     runner = ("simplace_runner_cluster.py" if spec.device == "cluster"
               else "simplace_runner.py")
-    log = spec.results_dir / f"simplace_trial_{trial_number}.log"
+    log = Path(log_path) if log_path else spec.run_dir / "logs" / f"simplace_{iteration}.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
 
     proc = subprocess.run(
         [sys.executable, str(spec.crop_dir / runner), str(spec.run_config)],
@@ -433,11 +401,39 @@ def run_simplace(spec: RunSpec, trial_number: int) -> None:
     if proc.returncode != 0:
         raise RuntimeError(f"SIMPLACE run failed (rc={proc.returncode}); see {log}")
 
-    produced = len(glob(str(spec.out_dir / "yearly" / "*.csv")))
+    produced = await_outputs(spec.out_dir, "yearly")
     if produced == 0:
         # The cluster runner reports "All jobs completed" even when SIMPLACE died
         # immediately (empty squeue), so an empty out/ is the real failure signal.
         raise RuntimeError(f"SIMPLACE produced no output; see {log}")
+
+
+def await_outputs(out_dir: Path, kind: str, timeout: float = 120.0,
+                  interval: float = 3.0) -> int:
+    """Number of output files, waiting out the shared filesystem's metadata cache.
+
+    ``run_simplace`` deletes ``out/<kind>/`` locally and the compute nodes recreate
+    it remotely. On BeeGFS the login node can keep serving a stale listing of that
+    directory for a few seconds after ``squeue`` goes empty, so a single glob taken
+    the instant the jobs finish reports zero files for a run that in fact
+    succeeded — which is indistinguishable from a real failure. A short run (a
+    small subset, an idle partition) lands inside that window; a long one never
+    does, which is why this only bites the fast cases.
+
+    Polls until files appear or ``timeout`` elapses, re-reading the parent
+    directory each time to force a fresh lookup.
+    """
+    target = Path(out_dir) / kind
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            os.listdir(out_dir)          # drop the cached listing of the parent
+        except OSError:
+            pass
+        found = len(glob(str(target / "*.csv")))
+        if found or time.monotonic() >= deadline:
+            return found
+        time.sleep(interval)
 
 
 def read_outputs(out_dir: Path, kind: str, max_workers: int = 32,
@@ -482,198 +478,3 @@ def discover_runs(crop_dir: Path) -> dict[str, Path]:
     return found
 
 
-# ---------------------------------------------------------------------------
-# Study + single trial
-# ---------------------------------------------------------------------------
-def open_study(spec: RunSpec) -> tuple[optuna.Study, bool]:
-    """Load (or create) the persistent study. Returns (study, was_created)."""
-    o = spec.optuna_cfg
-
-    existing = {s.study_name for s in optuna.get_all_study_summaries(storage=spec.storage)}
-    study = optuna.create_study(
-        study_name=spec.study_name, storage=spec.storage,
-        direction="minimize", load_if_exists=True,
-    )
-
-    # The sampler is constructed fresh in every process, so a CONSTANT seed would
-    # reset its RNG each run and redraw the identical parameter set forever — which
-    # is exactly what one-trial-per-invocation does. Advancing the seed by the trial
-    # count keeps runs reproducible (trial k always gets seed+k) while still moving.
-    seed = o.get("seed")
-    if seed is not None:
-        seed = int(seed) + len(study.trials)
-
-    if o.get("sampler", "tpe") == "random":
-        study.sampler = optuna.samplers.RandomSampler(seed=seed)
-    else:
-        study.sampler = optuna.samplers.TPESampler(
-            seed=seed, n_startup_trials=o.get("n_startup_trials", 10))
-
-    return study, spec.study_name not in existing
-
-
-def run_trial(spec: RunSpec, evaluate, args) -> dict:
-    """Run exactly one trial and report it.
-
-    ``evaluate(spec) -> (loss, extras)`` is supplied by the calling script and is
-    the only target-specific piece.
-    """
-    optuna.logging.set_verbosity(optuna.logging.WARNING)
-
-    print(f"[{spec.study_name}] staging calibration run dir ...")
-    info = build_run_dir(spec, rebuild=args.rebuild)
-    print(f"  run_dir={info['run_dir']}")
-    print(f"  project rows={info['rows']:,} locations={info['locations']:,}")
-
-    study, created = open_study(spec)
-    if created and spec.optuna_cfg.get("enqueue_baseline", True):
-        baseline = read_current_values(spec.crop_xml, spec.crop_name, spec.parameters)
-        outside = check_within_bounds(baseline, spec.parameters)
-        if outside:
-            # Optuna would still record it, but the sampler's model and the search
-            # space would disagree — better to say so than to fake a reference loss.
-            print(f"  baseline NOT enqueued: {', '.join(outside)} outside the "
-                  f"configured bounds (widen them in config.yaml to include it)")
-        elif baseline:
-            study.enqueue_trial(baseline, skip_if_exists=True)
-            print("  new study: trial 0 enqueued with current crop.xml values")
-
-    done = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
-    print(f"  history: {len(done)} completed trial(s)")
-
-    trial = study.ask()
-    drawn = suggest_parameters(trial, spec.parameters)
-    print(f"\n[trial {trial.number}] parameters:")
-    for k, v in drawn.items():
-        print(f"    {k} = {v}")
-
-    apply_parameters(spec.crop_xml, spec.crop_name, drawn)
-    shutil.copyfile(spec.crop_xml, spec.results_dir / f"trial_{trial.number}_crop.xml")
-
-    try:
-        if args.skip_run:
-            print("\n--skip-run: scoring the existing outputs, no simulation")
-        else:
-            print(f"\n[trial {trial.number}] running SIMPLACE ({spec.device}) ...")
-            run_simplace(spec, trial.number)
-
-        loss, extras = evaluate(spec)
-        if loss is None or not np.isfinite(loss):
-            raise RuntimeError(f"loss is not finite ({loss}); extras={extras}")
-    except Exception as exc:
-        study.tell(trial, state=optuna.trial.TrialState.FAIL)
-        print(f"\n[trial {trial.number}] FAILED: {exc}", file=sys.stderr)
-        _write_result(spec, {
-            "study": spec.study_name, "trial": trial.number, "status": "failed",
-            "error": str(exc), "parameters": drawn,
-        })
-        return {"status": "failed", "error": str(exc)}
-
-    study.tell(trial, loss)
-    best = study.best_trial
-
-    result = {
-        "study": spec.study_name,
-        "crop": spec.crop,
-        "target": spec.target,
-        "trial": trial.number,
-        "status": "completed",
-        "loss": float(loss),
-        "parameters": drawn,
-        "metrics": extras,
-        "is_new_best": best.number == trial.number,
-        "best_trial": best.number,
-        "best_loss": float(best.value),
-        "best_parameters": best.params,
-        "completed_trials": len(
-            [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]),
-        "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-    }
-
-    if result["is_new_best"]:
-        shutil.copyfile(spec.crop_xml, spec.results_dir / "best_crop.xml")
-
-    _write_result(spec, result)
-    _print_result(result)
-    return result
-
-
-def _write_result(spec: RunSpec, result: dict) -> None:
-    (spec.results_dir / "last.json").write_text(json.dumps(result, indent=2))
-    with open(spec.results_dir / "history.jsonl", "a") as fh:
-        fh.write(json.dumps(result) + "\n")
-
-
-def _print_result(r: dict) -> None:
-    """Machine-readable block: this is what a loop iteration reads back."""
-    print("\n" + "=" * 70)
-    print(f"RESULT  {r['study']}  trial {r['trial']}")
-    print("=" * 70)
-    for k, v in (r.get("metrics") or {}).items():
-        print(f"  {k:<28s} {v}")
-    print(f"  {'LOSS':<28s} {r['loss']:.4f}")
-    marker = "  <-- NEW BEST" if r["is_new_best"] else ""
-    print(f"  {'best so far':<28s} {r['best_loss']:.4f} (trial {r['best_trial']}){marker}")
-    print(f"  {'completed trials':<28s} {r['completed_trials']}")
-    print("=" * 70)
-    print("JSON " + json.dumps({
-        "trial": r["trial"], "loss": r["loss"], "parameters": r["parameters"],
-        "best_loss": r["best_loss"], "best_parameters": r["best_parameters"],
-        "is_new_best": r["is_new_best"], "completed_trials": r["completed_trials"],
-    }))
-
-
-def show_best(spec: RunSpec) -> int:
-    # Deliberately does not create the study: creating an empty one here would
-    # make the next real run think it is resuming and skip the baseline trial.
-    try:
-        study = optuna.load_study(study_name=spec.study_name, storage=spec.storage)
-    except (KeyError, optuna.exceptions.StorageInternalError):
-        print(f"[{spec.study_name}] no study yet")
-        return 1
-
-    done = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
-    if not done:
-        print(f"[{spec.study_name}] no completed trials yet")
-        return 1
-    b = study.best_trial
-    print(f"[{spec.study_name}] {len(done)} completed trial(s)")
-    print(f"  best trial {b.number}  loss={b.value:.4f}")
-    for k, v in b.params.items():
-        print(f"    {k} = {v}")
-    print(f"  best crop.xml: {spec.results_dir / 'best_crop.xml'}")
-    return 0
-
-
-# ---------------------------------------------------------------------------
-# CLI shared by the three scripts
-# ---------------------------------------------------------------------------
-def build_parser(target: str, description: str) -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(
-        description=description,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    ap.add_argument("--crop", default="winter_wheat", help="crop to calibrate")
-    ap.add_argument("--config", default=str(DEFAULT_CONFIG), help="optimization config")
-    ap.add_argument("--device", default="cluster", choices=["cluster", "local"],
-                    help="SIMPLACE driver to invoke")
-    ap.add_argument("--rebuild", action="store_true",
-                    help="rebuild the calibration run dir from scratch")
-    ap.add_argument("--skip-run", action="store_true",
-                    help="score the outputs already in out/ instead of simulating")
-    ap.add_argument("--show-best", action="store_true",
-                    help="print the best trial so far and exit (runs nothing)")
-    ap.set_defaults(target=target)
-    return ap
-
-
-def main(target: str, description: str, evaluate) -> int:
-    """Entry point shared by the three scripts: one invocation = one trial."""
-    args = build_parser(target, description).parse_args()
-    spec = load_spec(Path(args.config), args.crop, target, device=args.device)
-
-    if args.show_best:
-        return show_best(spec)
-
-    result = run_trial(spec, evaluate, args)
-    return 0 if result["status"] == "completed" else 1
