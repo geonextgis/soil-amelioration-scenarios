@@ -583,7 +583,11 @@ targets:
         clip: [0.0, 1.0]
         precision: 4
         affects_lai: true
-        coupled_with: [StemsPartitioningTableFraction, StorageOrgansPartitioningTableFraction]
+        coupled_with:
+          [
+            StemsPartitioningTableFraction,
+            StorageOrgansPartitioningTableFraction,
+          ]
         controls: [peak_lai, rise_rate, harvest_index]
         meaning: >-
           Fraction of above-ground dry matter allocated to leaves, by DVS. Changes
@@ -601,7 +605,11 @@ targets:
         clip: [0.0, 1.0]
         precision: 4
         affects_lai: true
-        coupled_with: [LeavesPartitioningTableFraction, StorageOrgansPartitioningTableFraction]
+        coupled_with:
+          [
+            LeavesPartitioningTableFraction,
+            StorageOrgansPartitioningTableFraction,
+          ]
         controls: [partitioning_balance]
         meaning: >-
           Fraction of above-ground dry matter to stems, by DVS. In this workflow it
@@ -617,7 +625,8 @@ targets:
         clip: [0.0, 1.0]
         precision: 4
         affects_lai: true
-        coupled_with: [StemsPartitioningTableFraction, LeavesPartitioningTableFraction]
+        coupled_with:
+          [StemsPartitioningTableFraction, LeavesPartitioningTableFraction]
         controls: [harvest_index]
         meaning: >-
           Fraction of above-ground dry matter routed to the storage organ (grain,
@@ -893,7 +902,7 @@ llm:
   # A calibration prompt carries the full parameter table, the diagnostics and
   # the history, which is large; and a cold local model is slow. The growth stage
   # carries two sets of diagnostics, so it is the largest of the two.
-  num_ctx: 32768
+  num_ctx: 65536
   # Guaranteed room for the answer, so the prompt cannot consume the whole budget.
   num_predict: 2048
   request_timeout: 900
@@ -908,10 +917,10 @@ llm:
   # How many recent iterations are shown in full. Older ones are compressed to one
   # line each — enough to stop a parameter being re-proposed, without letting the
   # prompt grow without bound as the ledger fills up.
-  history_iterations: 12
+  history_iterations: 6
   # Malformed JSON or a proposal that violates a constraint is handed back to the
   # model with the exact error, this many times, before the iteration is skipped.
-  max_repair_attempts: 50
+  max_repair_attempts: 5
   # Recorded in the ledger with every proposal, so a decision can always be traced
   # to the model that made it.
   record_prompts: true
