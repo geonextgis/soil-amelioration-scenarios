@@ -8,7 +8,7 @@
 
     <!-- Emergence -->
     <parameter id="TBASEM" description="lower threshold temp. for emergence" unit="http://www.wurvoc.org/vocabularies/om-1.8/degree_Celsius">0.0</parameter>
-    <parameter id="TEFFMX" description="max. eff. temp. for emergence" unit="http://www.wurvoc.org/vocabularies/om-1.8/degree_Celsius">30</parameter>
+    <parameter id="TEFFMX" description="max. eff. temp. for emergence" unit="http://www.wurvoc.org/vocabularies/om-1.8/degree_Celsius">25.0</parameter>
     <parameter id="TSUMEM" description="temperature sum from sowing to emergence" unit="http://www.wurvoc.org/vocabularies/om-1.8/degree_Celsius_day">60.</parameter>
 
     <!-- Phenology -->
@@ -32,8 +32,8 @@
       <value>0</value>
       <value>1</value>
     </parameter>
-    <parameter id="TSUM1" description="temperature sum from emergance to anthesis" unit="http://www.wurvoc.org/vocabularies/om-1.8/degree_Celsius_day">1280</parameter>
-    <parameter id="TSUM2" description="temperature sum from anthesis to maturity" unit="http://www.wurvoc.org/vocabularies/om-1.8/degree_Celsius_day">970</parameter>
+    <parameter id="TSUM1" description="temperature sum from emergance to anthesis" unit="http://www.wurvoc.org/vocabularies/om-1.8/degree_Celsius_day">800.0</parameter>
+    <parameter id="TSUM2" description="temperature sum from anthesis to maturity" unit="http://www.wurvoc.org/vocabularies/om-1.8/degree_Celsius_day">1039.5</parameter>
     <parameter id="TsumIncrementTableMeanTemp" description="Daily increase in temperature sum as function of av. temp. [Cel;Cel d]" unit="http://www.wurvoc.org/vocabularies/om-1.8/degree_Celsius_day">
       <value>-5.00</value>
       <value>0.00</value>

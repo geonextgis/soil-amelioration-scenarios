@@ -23,9 +23,9 @@ climate:
 
 slurm:
   singularity_image: /beegfs/common/singularity/simplace/simplace_5.0-3897.sif
-  partition: highmem
+  partition: compute
   walltime: "03:00:00"
-  num_nodes: 20
+  num_nodes: 50
   num_tasks_per_node: 8
   debug: false
 
@@ -93,7 +93,7 @@ targets:
         inputs: production
         subset:
           n_locations: 400
-          year_start: 2000
+          year_start: 1995
           year_end: 2023
 
 # ---------------------------------------------------------------------------
