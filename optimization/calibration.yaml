@@ -32,6 +32,35 @@ extends: config.yaml
 # `kind: table` expands to one bound per <value> element actually present.
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# The enabled switch
+# ---------------------------------------------------------------------------
+# EVERY parameter below carries an explicit `enabled:` flag. It is the first key
+# of each block so the state of the space can be read at a glance:
+#
+#   enabled: true    in the space. The agent may propose it.
+#   enabled: false   out of the space entirely — a proposal naming it is refused
+#                    at parse time ("not a calibratable parameter"), it is never
+#                    offered to an agent, and `calibrate.py status` lists it in a
+#                    separate section with `disabled_reason`.
+#
+# Switching a parameter off this way rather than deleting or commenting out its
+# block keeps the bounds, the biological `meaning` and — most importantly — the
+# reason it is off. A deleted block loses all three, and the next person to look
+# has no way to know whether it was tried and rejected or simply forgotten.
+#
+# `enabled: false` is the weakest of the three ways to stop a parameter moving:
+#
+#   enabled: false            not calibrated in this study        (refused at parse)
+#   mode: absolute, low==high visible to the agent but immovable  (bounds violation)
+#   frozen_groups + frozen:   provably never written              (frozen violation,
+#                             plus the written XML is re-read and diffed after
+#                             every single iteration)
+#
+# Use `frozen:` for a finished stage whose values must be protected against
+# indirect drift; use `enabled: false` for "not this study".
+# ---------------------------------------------------------------------------
+
 # Parameter groups that a target may declare frozen. `lai_calibrated` is
 # resolved dynamically to every parameter id under targets.lai.parameters.
 frozen_groups:
@@ -102,20 +131,21 @@ targets:
       the first change and diffed on every iteration.
     frozen: []
     subset:
-      n_locations: 150
+      n_locations: 400
       year_start: 1995
       year_end: 2022
 
     stopping:
-      max_iterations: 20
+      max_iterations: 100
       # Mean of the flowering and maturity RMSE, in days. Below ~6 days the error
       # is comparable to the reporting resolution of the DWD phenology network.
       target_objective: 6.0
       min_improvement: 0.5
-      patience: 5
+      patience: 20
 
     parameters:
       TSUMEM:
+        enabled: true
         kind: scalar
         type: float
         mode: relative
@@ -129,6 +159,7 @@ targets:
           maturity, with the flowering-to-maturity duration unchanged, points here
           or at TBASEM rather than at TSUM1/TSUM2.
       TBASEM:
+        enabled: true
         kind: scalar
         type: float
         mode: absolute
@@ -143,6 +174,7 @@ targets:
           than on summer ones — the signature is a lateness that grows in cold
           years and cold regions, not a constant offset. Must stay below TEFFMX.
       TEFFMX:
+        enabled: true
         kind: scalar
         type: float
         mode: absolute
@@ -157,6 +189,7 @@ targets:
           when the phenology bias is correlated with seasonal temperature — too
           early in warm years, right in cool ones — rather than uniform.
       TSUM1:
+        enabled: true
         kind: scalar
         type: float
         mode: relative
@@ -170,6 +203,7 @@ targets:
           late. Because maturity is dated from anthesis, a change here moves both
           dates by roughly the same amount — fix flowering first, then TSUM2.
       TSUM2:
+        enabled: true
         kind: scalar
         type: float
         mode: relative
@@ -184,6 +218,7 @@ targets:
           the flowering bias is a TSUM1 problem, and only the part that does not
           is a TSUM2 problem.
       TsumIncrementTableRate:
+        enabled: true
         kind: table
         type: float
         mode: relative
@@ -197,6 +232,7 @@ targets:
           for it only when TSUM1/TSUM2 cannot remove a bias that is structured by
           temperature, because it changes the response at every stage at once.
       PhotoperiodTableFactor:
+        enabled: true
         kind: table
         type: float
         mode: relative
@@ -275,6 +311,7 @@ targets:
 
     parameters:
       RGRLAI:
+        enabled: true
         kind: scalar
         type: float
         mode: relative
@@ -289,6 +326,7 @@ targets:
           if the canopy closes too fast. Has almost no effect after the crop
           switches to SLA-driven leaf area expansion.
       TDWI:
+        enabled: true
         kind: scalar
         type: float
         mode: relative
@@ -303,6 +341,7 @@ targets:
           observation onwards rather than diverging gradually. Prefer RGRLAI when
           the *slope* is wrong and TDWI when the *intercept* is wrong.
       SLATableSLA:
+        enabled: true
         kind: table
         type: float
         mode: relative
@@ -318,6 +357,7 @@ targets:
           the diagnostics points straight at the element to move. Keep the profile
           smooth — SLA physically declines from young to mature leaves.
       LeavesPartitioningTableFraction:
+        enabled: true
         kind: table
         type: float
         mode: relative
@@ -334,6 +374,7 @@ targets:
           Leaves + stems + storage organs must still sum to 1 at every shared DVS
           node — adjust StemsPartitioningTableFraction by the opposite amount.
       StemsPartitioningTableFraction:
+        enabled: true
         kind: table
         type: float
         mode: relative
@@ -347,6 +388,7 @@ targets:
           exists as the counterweight to the leaf fraction: it is what keeps the
           above-ground partitioning summing to 1 when leaf allocation is changed.
       LAICR:
+        enabled: true
         kind: scalar
         type: float
         mode: relative
@@ -360,6 +402,7 @@ targets:
           rise and the senescence are both timed correctly, lowering LAICR caps the
           peak without distorting the rest of the curve.
       RDRSHM:
+        enabled: true
         kind: scalar
         type: float
         mode: relative
@@ -372,6 +415,7 @@ targets:
           how hard that ceiling bites. Raise it together with (or instead of)
           lowering LAICR when the plateau is too high and too long.
       RDRLeavesTableRelativeRate:
+        enabled: true
         kind: table
         type: float
         mode: relative
@@ -386,6 +430,7 @@ targets:
           senescence is too slow; the cold-end elements mostly affect
           overwintering canopy loss in the winter crops.
       DVSDLT:
+        enabled: true
         kind: scalar
         type: float
         mode: absolute
@@ -399,6 +444,7 @@ targets:
           driver of DVS, so it does not touch the frozen phenology. Lower it when
           the simulated canopy stays green too long after anthesis.
       RDRNS:
+        enabled: true
         kind: scalar
         type: float
         mode: relative
@@ -412,6 +458,7 @@ targets:
           locations. Reach for it when the LAI bias is spatially structured rather
           than uniform, and check NNI in the yearly output before moving it.
       RDRL:
+        enabled: true
         kind: scalar
         type: float
         mode: relative
@@ -485,11 +532,12 @@ targets:
     # above-ground allocation summing to 1. Freezing it here would make the
     # storage-organ fraction unmovable, so it is excused — the closure constraint
     # below is what actually keeps it honest.
-    frozen_exclude: [StemsPartitioningTableFraction]
+    # frozen_exclude: [StemsPartitioningTableFraction]
+    frozen_exclude: []
 
     subset:
       n_locations: 400
-      year_start: 1995
+      year_start: 2000
       year_end: 2023
 
     stopping:
@@ -500,6 +548,7 @@ targets:
 
     parameters:
       RUETableRUE:
+        enabled: true
         kind: table
         type: float
         mode: relative
@@ -516,7 +565,88 @@ targets:
           brings into grain filling; later elements set how much is still being
           fixed during grain filling. Raising RUE also raises leaf weight and hence
           LAI — run verify-lai after changing it.
+
+      FRTDM:
+        enabled: true
+        kind: scalar
+        type: float
+        # Absolute, not relative: the five crops start anywhere from 0.01
+        # (rapeseed) to 0.2 (spring barley), and relative bounds around 0.01 would
+        # pin rapeseed to a range far too narrow to test the mechanism at all.
+        mode: absolute
+        low: 0.0
+        high: 0.35
+        precision: 3
+        controls: [translocation, harvest_index]
+        meaning: >-
+          Fraction of pre-anthesis above-ground biomass available for
+          remobilisation to the storage organ. This is the one translocation
+          parameter the solution actually consumes — it is the input to the
+          BiomassTranslocation component, whose result is reported separately as
+          Yield_translocated_t_ha. Raising it moves assimilate laid down in leaves
+          and stems before anthesis into the grain, which raises the harvest index
+          WITHOUT changing total above-ground biomass. That makes it the right
+          lever when biomass is plausible, the harvest index is not, and the
+          partitioning tables are a step function that cannot be moved. Read the
+          `translocation` block of the diagnostics before touching it: it scores
+          Yield_t_ha and Yield_translocated_t_ha against the same observed
+          district yields and says whether the remobilisation term is currently
+          helping or overshooting. Measured remobilisation in small-grain cereals
+          is roughly 10-25% of pre-anthesis assimilate.
+
+      # ---------------------------------------------------------------------
+      # Disabled — kept as documentation rather than deleted.
+      #
+      # `enabled: false` removes a parameter from the space entirely: it cannot be
+      # proposed (a proposal naming it is refused at parse time), it is not shown
+      # to the agent as changeable, and `calibrate.py status` lists it with the
+      # reason. Deleting the block would have the same calibration effect and lose
+      # the finding, which is why these two stay here.
+      #
+      # Both are declared under the `crop` resource in solution.sol.xml but are
+      # taken as an input by no simcomponent, so writing them changes nothing in
+      # the simulation. Any objective movement while calibrating them would be
+      # noise being read as signal.
+      # ---------------------------------------------------------------------
+      YieldAdjustRatio:
+        enabled: false
+        disabled_reason: >-
+          declared in solution.sol.xml but consumed by no simcomponent (verified by
+          grep for source="crop.YieldAdjustRatio") — changing it cannot change any
+          simulated value
+        kind: scalar
+        type: float
+        mode: absolute
+        low: 0.8
+        high: 1.2
+        precision: 3
+        controls: [yield_scale]
+        meaning: >-
+          Intended as a multiplicative correction on reported yield. Inert in this
+          solution. If it is ever wired up, treat it as the last resort: it changes
+          nothing inside the growth simulation, so it can only remove a uniform
+          offset, never a pattern.
+
+      FreshratioStorageOrgan:
+        enabled: false
+        disabled_reason: >-
+          declared in solution.sol.xml but consumed by no simcomponent — changing
+          it cannot change any simulated value; the per-crop `dm_fraction` in
+          config.yaml is what actually puts observed yield on a dry-matter basis
+        kind: scalar
+        type: float
+        mode: absolute
+        low: 0.75
+        high: 0.95
+        precision: 3
+        controls: [yield_scale, moisture_basis]
+        meaning: >-
+          Intended as the dry-matter fraction converting storage-organ weight to
+          the reported yield basis (~0.86 = 14% moisture for cereals). Inert in
+          this solution.
+
       StorageOrgansPartitioningTableFraction:
+        enabled: true
         kind: table
         type: float
         mode: relative
@@ -533,6 +663,7 @@ targets:
           when the diagnostics attribute the error to HI rather than to biomass.
           Must stay consistent with leaves + stems at every shared DVS node.
       StemsPartitioningTableFraction:
+        enabled: true
         kind: table
         type: float
         mode: relative
@@ -550,35 +681,8 @@ targets:
           crop.xml has a hard 0->1 step at anthesis (winter wheat, spring barley)
           both tables are pinned at their end points, and the harvest index has to
           be reached through RUE and YieldAdjustRatio instead.
-      YieldAdjustRatio:
-        kind: scalar
-        type: float
-        mode: absolute
-        low: 0.7
-        high: 1.3
-        precision: 3
-        controls: [yield_scale]
-        meaning: >-
-          Multiplicative correction applied to reported yield only. It changes
-          nothing inside the growth simulation, so it cannot fix a pattern — only a
-          uniform level offset. Treat it as the *last* lever: use it to close a
-          residual constant bias after the process parameters are as good as they
-          can be, and never to compensate a bias that varies by year or by region.
-      FreshratioStorageOrgan:
-        kind: scalar
-        type: float
-        mode: absolute
-        low: 0.75
-        high: 0.95
-        precision: 3
-        controls: [yield_scale, moisture_basis]
-        meaning: >-
-          Dry-matter fraction used to convert storage-organ weight to the reported
-          yield basis. Physically a moisture convention (~0.86 = 14% moisture for
-          cereals), so it has a narrow defensible range. Only move it if the
-          observed yields are genuinely on a different moisture basis; the per-crop
-          `dm_fraction` in config.yaml already handles the fresh-weight crops.
       KDIFTableK:
+        enabled: true
         kind: table
         type: float
         mode: relative
@@ -593,6 +697,7 @@ targets:
           concentrated in low-LAI phases (early season, post-anthesis) rather than
           being proportional across the whole season.
       NMAXSO:
+        enabled: true
         kind: scalar
         type: float
         mode: relative
@@ -606,6 +711,7 @@ targets:
           limitation. Relevant when the yield shortfall tracks NNI or fertiliser
           rate rather than radiation.
       TCNT:
+        enabled: true
         kind: scalar
         type: float
         mode: relative
@@ -619,6 +725,7 @@ targets:
           Affects how much of a short grain-filling period the crop can exploit, so
           it shows up as a yield error correlated with season length.
       NLUE:
+        enabled: true
         kind: scalar
         type: float
         mode: absolute
@@ -632,6 +739,7 @@ targets:
           bias is spatially structured along the fertiliser/soil-N gradient rather
           than uniform.
       DVSNT:
+        enabled: true
         kind: scalar
         type: float
         mode: absolute
@@ -644,6 +752,7 @@ targets:
           starts. A threshold on DVS, not a driver of it — frozen phenology is
           unaffected. Earlier onset lengthens the effective filling window.
       DVSNLT:
+        enabled: true
         kind: scalar
         type: float
         mode: absolute
@@ -778,17 +887,17 @@ llm:
     # and the diversity that helps creative writing shows up here as parameter
     # thrash.
     lai:
-      model: qwen2.5:14b-instruct
+      model: qwen3.6:35b-a3b
       temperature: 0.2
     yield:
-      model: qwen2.5:14b-instruct
+      model: qwen3.6:35b-a3b
       temperature: 0.2
     phenology:
-      model: qwen2.5:14b-instruct
+      model: qwen3.6:35b-a3b
       # Phenology has the cleanest attribution rules of the three (flowering ->
       # TSUM1, duration -> TSUM2), so there is nothing to gain from sampling.
       temperature: 0.1
     analyst:
       # Read-only: writes the narrative interpretation of a run, proposes nothing.
-      model: qwen2.5:14b-instruct
+      model: qwen3.6:35b-a3b
       temperature: 0.3

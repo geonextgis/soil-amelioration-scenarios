@@ -221,11 +221,28 @@ def lai_loss_fn(df: pd.DataFrame) -> tuple[float, dict]:
 # the model's dry-matter basis.
 
 
+# Carried alongside the yield itself so the loss can report the harvest index and
+# the translocated-yield comparison without a second pass over the output files.
+# Absent columns are tolerated: a crop whose solution predates BiomassTranslocation
+# simply reports fewer metrics instead of failing the whole iteration.
+YIELD_EXTRA_COLUMNS = {
+    "AGBiomass_t_ha": "ag_biomass_sim",
+    "Yield_translocated_t_ha": "yield_translocated_sim",
+}
+
+
 def yield_process_result(spec: common.RunSpec) -> pd.DataFrame:
-    """Aggregate simulated point yields to NUTS-3 and join the observed districts."""
-    sim = common.read_outputs(spec.out_dir, "yearly")[["Location", "Year", "Yield_t_ha"]]
+    """Aggregate simulated point yields to NUTS-3 and join the observed districts.
+
+    Also carries above-ground biomass and translocated yield through the same
+    aggregation, so harvest index and the FRTDM translocation term are reported on
+    exactly the district-years the objective is scored on.
+    """
+    raw = common.read_outputs(spec.out_dir, "yearly")
+    extra = {src: dst for src, dst in YIELD_EXTRA_COLUMNS.items() if src in raw.columns}
+    sim = raw[["Location", "Year", "Yield_t_ha", *extra]]
     sim = sim.rename(columns={"Location": "location", "Year": "year",
-                              "Yield_t_ha": "yield_sim"})
+                              "Yield_t_ha": "yield_sim", **extra})
 
     # District/state lookup from this run's own project table.
     points = (
@@ -237,7 +254,8 @@ def yield_process_result(spec: common.RunSpec) -> pd.DataFrame:
     )
 
     sim = sim.merge(points, on="location", how="inner")
-    sim = (sim.groupby(["NUTS_ID", "STATE_NAME", "year"], as_index=False)["yield_sim"]
+    value_columns = ["yield_sim", *extra.values()]
+    sim = (sim.groupby(["NUTS_ID", "STATE_NAME", "year"], as_index=False)[value_columns]
               .mean())
 
     obs = pd.read_csv(spec.crop_dir / "data_observed" / f"yield_{spec.crop}.csv",
@@ -248,7 +266,12 @@ def yield_process_result(spec: common.RunSpec) -> pd.DataFrame:
 
 
 def yield_loss_fn(df: pd.DataFrame) -> tuple[float, dict]:
-    """Mean of the yearly-mean RMSE (temporal) and state-mean RMSE (spatial)."""
+    """Mean of the yearly-mean RMSE (temporal) and state-mean RMSE (spatial).
+
+    The **objective is unchanged** by the extra metrics below — harvest index and
+    the translocated-yield comparison are reported, not scored. Adding either to
+    the loss would silently invalidate every objective already in the ledger.
+    """
     if df.empty:
         raise RuntimeError("no simulated/observed yield pairs matched")
 
@@ -269,6 +292,36 @@ def yield_loss_fn(df: pd.DataFrame) -> tuple[float, dict]:
         "district-years": int(len(df)),
         "districts": int(df["NUTS_ID"].nunique()),
     }
+
+    # --- harvest index -------------------------------------------------------
+    if "ag_biomass_sim" in df:
+        biomass = df["ag_biomass_sim"].to_numpy(float)
+        usable = biomass > 0
+        if usable.any():
+            hi_sim = df["yield_sim"].to_numpy(float)[usable] / biomass[usable]
+            # What HI would have to be, on the same biomass, to hit the observed
+            # yield. The gap between the two is the partitioning question.
+            hi_needed = df["yield"].to_numpy(float)[usable] / biomass[usable]
+            metrics.update({
+                "harvest index (sim)": round(float(np.median(hi_sim)), 4),
+                "harvest index (required)": round(float(np.median(hi_needed)), 4),
+                "HI bias": round(float(np.median(hi_sim) - np.median(hi_needed)), 4),
+                "mean AG biomass (t/ha)": round(float(np.mean(biomass[usable])), 4),
+            })
+
+    # --- translocated yield (the FRTDM term) ---------------------------------
+    if "yield_translocated_sim" in df:
+        translocated = df["yield_translocated_sim"]
+        metrics.update({
+            "mean translocated yield (t/ha)": round(float(translocated.mean()), 4),
+            "RMSE translocated vs obs (t/ha)": round(rmse(df["yield"], translocated), 4),
+            # >1 means the translocation component adds to the storage organ; the
+            # size of that addition is what FRTDM controls.
+            "translocated / yield ratio": round(
+                float((translocated.mean() / df["yield_sim"].mean())), 4)
+            if df["yield_sim"].mean() else None,
+        })
+
     return loss, metrics
 
 

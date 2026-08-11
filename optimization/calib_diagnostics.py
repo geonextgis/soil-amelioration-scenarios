@@ -731,7 +731,9 @@ def yield_diagnostics(frame: pd.DataFrame, reference: dict | None = None) -> dic
             verdict = "bias is small; no attribution needed"
         elif agb_ok and not hi_ok:
             verdict = ("biomass is plausible but the harvest index is not -> yield-specific "
-                       "parameters (StorageOrgans partitioning, translocation, YieldAdjustRatio)")
+                       "parameters: post-anthesis RUE, N translocation (TCNT/DVSNT/DVSNLT/"
+                       "NMAXSO), FRTDM. Check whether the partitioning tables are a step "
+                       "function first — if they are, they cannot be moved.")
         elif hi_ok and not agb_ok:
             verdict = ("harvest index is plausible but biomass is not -> biomass parameters "
                        "(RUETableRUE, KDIFTableK) or an unresolved LAI error")
@@ -768,7 +770,64 @@ def yield_diagnostics(frame: pd.DataFrame, reference: dict | None = None) -> dic
                                  "the stress-response parameters rather than the potential ones"),
         }
 
+    out["translocation"] = _translocation_diagnostics(frame)
     return _round(out)
+
+
+def _translocation_diagnostics(frame: pd.DataFrame) -> dict | None:
+    """Does the FRTDM translocation term move the model toward the observations?
+
+    The solution reports two storage-organ weights: ``Yield_t_ha`` from the biomass
+    component, and ``Yield_translocated_t_ha`` from ``BiomassTranslocation``, which
+    adds the pre-anthesis reserves that FRTDM makes available for remobilisation.
+
+    Scoring both against the same observed district yields is the only honest way
+    to answer "is FRTDM worth having": if the translocated series is closer, the
+    remobilisation term is doing real work and FRTDM is worth calibrating; if it is
+    further away, raising FRTDM will make the fit worse no matter what the yield
+    bias looks like.
+    """
+    sim_col = "yield_sim" if "yield_sim" in frame else "Yield_t_ha"
+    if "Yield_translocated_t_ha" not in frame.columns or sim_col not in frame.columns:
+        return None
+
+    observed = frame["yield"]
+    plain = frame[sim_col]
+    translocated = frame["Yield_translocated_t_ha"]
+    ok = observed.notna() & plain.notna() & translocated.notna()
+    if ok.sum() < 5:
+        return None
+
+    observed, plain, translocated = observed[ok], plain[ok], translocated[ok]
+    m_plain = metrics(observed, plain)
+    m_trans = metrics(observed, translocated)
+    delta = m_trans["RMSE"] - m_plain["RMSE"]
+
+    contribution = float((translocated - plain).median())
+    if abs(delta) < 0.05:
+        verdict = ("the two yield definitions fit the observations equally well — the "
+                   "translocation term is not currently distinguishable, so FRTDM is "
+                   "not the parameter to move")
+    elif delta < 0:
+        verdict = (f"translocated yield fits better by {abs(delta):.3f} t/ha RMSE — the "
+                   f"remobilisation term is doing real work; FRTDM is worth calibrating "
+                   f"and the reported Yield_t_ha understates what the crop achieves")
+    else:
+        verdict = (f"translocated yield fits WORSE by {delta:.3f} t/ha RMSE — the "
+                   f"remobilisation term overshoots; lower FRTDM rather than raising it")
+
+    return {
+        "yield_plain": m_plain,
+        "yield_translocated": m_trans,
+        "rmse_delta_translocated_minus_plain": float(delta),
+        "median_translocation_contribution_t_ha": contribution,
+        "mean_translocated_t_ha": float(translocated.mean()),
+        "mean_plain_t_ha": float(plain.mean()),
+        "verdict": verdict,
+        "note": ("Yield_t_ha comes from the biomass component; Yield_translocated_t_ha "
+                 "comes from BiomassTranslocation, which adds the pre-anthesis reserves "
+                 "FRTDM makes available. The objective is scored on Yield_t_ha."),
+    }
 
 
 def yield_plots(frame: pd.DataFrame, out_dir: Path, title: str) -> list[str]:

@@ -182,19 +182,36 @@ def cmd_status(args) -> int:
     print(f"  stopping              {'STOP — ' if stop['stop'] else ''}{stop['reason']}")
 
     print(f"\n{'-' * 78}\n  calibratable parameters\n{'-' * 78}")
+    disabled = []
     for row in space:
         if not row.get("present"):
             print(f"  {row['parameter']:<38s} (absent for this crop)")
             continue
+        # A disabled parameter carries no bounds — it never entered the space —
+        # so it cannot be rendered like a calibratable one. Collect and list it
+        # separately with the reason it was switched off.
+        if row.get("enabled") is False:
+            disabled.append(row)
+            continue
         flags = []
-        if row["affects_lai"]:
+        if row.get("affects_lai"):
             flags.append("affects LAI")
-        if row["coupled_with"]:
+        if row.get("coupled_with"):
             flags.append("coupled: " + ", ".join(row["coupled_with"]))
+        if not row.get("movable", True):
+            flags.append("IMMOVABLE")
+        elif row.get("immovable_indices"):
+            flags.append(f"fixed elements {row['immovable_indices']}")
         print(f"  {row['parameter']:<38s} {_fmt(row['value'])}")
         print(f"  {'':38s} bounds {_fmt(row['bounds'])}")
-        print(f"  {'':38s} controls: {', '.join(row['controls']) or '-'}"
+        print(f"  {'':38s} controls: {', '.join(row.get('controls') or []) or '-'}"
               + (f"   [{'; '.join(flags)}]" if flags else ""))
+
+    if disabled:
+        print(f"\n{'-' * 78}\n  disabled (enabled: false in calibration.yaml)\n{'-' * 78}")
+        for row in disabled:
+            print(f"  {row['parameter']:<38s} {_fmt(row['value'])}")
+            print(f"  {'':38s} {' '.join((row.get('note') or '').split())}")
 
     if ledger:
         print(f"\n{'-' * 78}\n  history\n{'-' * 78}")
@@ -522,6 +539,15 @@ def _report(spec: cc.CalibSpec, record: dict) -> None:
               f"required {a['ag_biomass_required_to_match_obs']:.2f}   "
               f"ref {a['reference_ag_biomass_t_ha']}")
         print(f"  attribution     {a['verdict']}")
+    if spec.target == "yield" and diagnostics.get("translocation"):
+        t = diagnostics["translocation"]
+        print(f"\n  translocation   Yield_t_ha              RMSE {t['yield_plain']['RMSE']:.3f} "
+              f"t/ha  mean {t['mean_plain_t_ha']:.2f}")
+        print(f"                  Yield_translocated_t_ha RMSE "
+              f"{t['yield_translocated']['RMSE']:.3f} t/ha  mean {t['mean_translocated_t_ha']:.2f}")
+        print(f"                  FRTDM contribution      "
+              f"{t['median_translocation_contribution_t_ha']:+.3f} t/ha (median)")
+        print(f"  FRTDM verdict   {t['verdict']}")
 
     stop = cc.stop_check(spec)
     print(f"\n  stopping: {'STOP — ' if stop['stop'] else 'continue — '}{stop['reason']}")

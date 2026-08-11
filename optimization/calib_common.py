@@ -178,6 +178,17 @@ def resolve_space(xml_path: Path, crop_name: str, params_cfg: dict) -> tuple[dic
                          "note": f"not defined for crop {crop_name!r}; excluded"}
             continue
 
+        # `enabled: false` switches a parameter off without deleting its
+        # declaration. It stays out of the space entirely, so a proposal naming it
+        # is refused at parse time — but its meaning and the reason it was
+        # disabled survive in the config and are reported by `status`, which is
+        # the point: a commented-out block loses the why.
+        if pc.get("enabled", True) is False:
+            meta[pid] = {**pc, "present": True, "current": current, "enabled": False,
+                         "note": pc.get("disabled_reason")
+                         or "disabled in calibration.yaml (enabled: false)"}
+            continue
+
         kind = pc.get("kind", "scalar")
         ptype = pc.get("type", "float")
         precision = int(pc.get("precision", 4))
@@ -524,6 +535,37 @@ def validate(proposal: dict, current: dict, space: dict, meta: dict,
 # ---------------------------------------------------------------------------
 # Closure locks
 # ---------------------------------------------------------------------------
+def drop_frozen_from_space(space: dict, meta: dict, frozen: list[str]) -> list[str]:
+    """Remove parameters that are declared *and* frozen. Returns what was dropped.
+
+    A parameter can end up in both when a target declares it and also inherits a
+    freeze group that covers it — e.g. the yield target declaring
+    ``StemsPartitioningTableFraction`` while ``lai_calibrated`` freezes it and
+    ``frozen_exclude`` no longer excuses it.
+
+    Left alone, that produces the worst kind of lever: advertised with bounds and
+    a meaning, rejected by the freeze guard every single time it is proposed. The
+    freeze must win — it is the stronger statement — and the parameter has to
+    disappear from the space so nothing offers it.
+    """
+    frozen_set = set(frozen or [])
+    dropped = []
+    for key in ("single_value_params", "multi_value_params"):
+        block = space.get(key) or {}
+        for pid in [p for p in block if p in frozen_set]:
+            del block[pid]
+            dropped.append(pid)
+        space[key] = block or None
+    for pid in dropped:
+        info = meta.get(pid)
+        if info is not None:
+            info["enabled"] = False
+            info["note"] = ("declared for this target but also frozen by one of its "
+                            "`frozen:` groups — the freeze wins. Add it to "
+                            "`frozen_exclude:` if it is meant to be calibratable here.")
+    return dropped
+
+
 def apply_closure_locks(space: dict, meta: dict, constraints: list, frozen: list[str],
                         xml_path: Path, crop_name: str) -> dict:
     """Pin table elements that a closure constraint makes mathematically immovable.
@@ -783,6 +825,7 @@ def load_spec(config_path: Path, crop: str, target: str, device: str = "cluster"
     space, meta = resolve_space(xml_for_space, run.crop_name, tcfg.get("parameters") or {})
     frozen = frozen_ids(cfg, tcfg)
     constraints = tcfg.get("constraints") or []
+    drop_frozen_from_space(space, meta, frozen)
     apply_closure_locks(space, meta, constraints, frozen, xml_for_space, run.crop_name)
     run = dataclasses.replace(run, parameters=space)
 
@@ -803,6 +846,7 @@ def refresh_space(spec: CalibSpec) -> CalibSpec:
     """
     space, meta = resolve_space(spec.crop_xml, spec.crop_name,
                                 spec.target_cfg.get("parameters") or {})
+    drop_frozen_from_space(space, meta, spec.frozen)
     apply_closure_locks(space, meta, spec.constraints, spec.frozen,
                         spec.crop_xml, spec.crop_name)
     spec.space, spec.meta = space, meta
@@ -981,6 +1025,12 @@ def describe_space(spec: CalibSpec) -> list[dict]:
     for pid, info in spec.meta.items():
         if not info.get("present"):
             rows.append({"parameter": pid, "present": False, "note": info.get("note")})
+            continue
+        if info.get("enabled") is False:
+            rows.append({"parameter": pid, "present": True, "enabled": False,
+                         "value": info.get("current"), "movable": False,
+                         "note": info.get("note"), "locked_reason": info.get("note"),
+                         "meaning": " ".join((info.get("meaning") or "").split())})
             continue
         value = values.get(pid, info.get("current"))
         if isinstance(value, list):

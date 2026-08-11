@@ -317,6 +317,32 @@ RGRLAI:
     closes too fast.
 ```
 
+### Turning a parameter off
+
+```yaml
+      YieldAdjustRatio:
+        enabled: false
+        disabled_reason: >-
+          declared in solution.sol.xml but consumed by no simcomponent —
+          changing it cannot change any simulated value
+        kind: scalar
+        ...
+```
+
+`enabled: false` removes the parameter from the space entirely: a proposal naming
+it is refused at parse time, it is never offered to an agent, and
+`calibrate.py status` lists it with the reason. Deleting the block has the same
+calibration effect and loses the finding — which is why the two inert parameters
+are disabled rather than removed.
+
+Three ways to stop a parameter moving, in increasing strength:
+
+| Goal | How | Enforcement |
+|---|---|---|
+| Not calibrated in this study | `enabled: false` | refused at parse: *not a calibratable parameter* |
+| Visible but immovable | `mode: absolute` with `low: X, high: X` | `bounds` violation |
+| Provably never written | add to `frozen_groups`, list under the target's `frozen:` | `frozen` violation, plus the XML re-read after every iteration |
+
 Bounds are **relative to each crop's own `crop.xml`**, so one declaration fits
 all five crops even though their SLA tables have 8 (wheat), 5 (rapeseed),
 3 (potato) nodes. Table parameters expand to one bound per element actually

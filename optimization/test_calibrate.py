@@ -33,17 +33,43 @@ import common  # noqa: E402
 CONFIG = OPTIM_DIR / "calibration.yaml"
 CROPS = ["winter_wheat", "winter_rapeseed", "spring_barley", "potato", "maize"]
 
-_results: list[tuple[str, bool, str]] = []
+_results: list[tuple[str, str, str]] = []
+
+
+class Skip(Exception):
+    """This check does not apply to the current configuration."""
+
+
+def require_params(spec, *pids):
+    """Skip a check whose parameters the config no longer declares.
+
+    The parameter space is a tuning surface: a user may legitimately disable or
+    delete any entry. A test that hard-codes one is asserting a configuration
+    choice rather than an invariant, so it steps aside instead of failing.
+    """
+    space = set(spec.space.get("single_value_params") or {}) | \
+        set(spec.space.get("multi_value_params") or {})
+    missing = [p for p in pids if p not in space]
+    if missing:
+        raise Skip(f"not declared for {spec.crop}/{spec.target}: {', '.join(missing)}")
 
 
 def test(name):
     def wrap(fn):
         try:
             fn()
-            _results.append((name, True, ""))
+            _results.append((name, "pass", ""))
             print(f"  PASS  {name}")
-        except Exception as exc:  # noqa: BLE001
-            _results.append((name, False, traceback.format_exc()))
+        except Skip as exc:
+            _results.append((name, "skip", str(exc)))
+            print(f"  SKIP  {name}: {exc}")
+        # SystemExit is how calib_common reports a bad proposal, and it does not
+        # derive from Exception — catching only Exception lets one such raise
+        # abort the whole run silently mid-suite.
+        except BaseException as exc:  # noqa: BLE001
+            if isinstance(exc, KeyboardInterrupt):
+                raise
+            _results.append((name, "fail", traceback.format_exc()))
             print(f"  FAIL  {name}: {type(exc).__name__}: {exc}")
         return fn
     return wrap
@@ -168,8 +194,17 @@ def _():
     for pid in ("RGRLAI", "SLATableSLA", "LAICR", "DVSDLT"):
         assert pid in yld.frozen, f"{pid} must be frozen during yield calibration"
         assert pid not in lai.frozen, f"{pid} must be calibratable during LAI calibration"
-    # ...except the structural counterweight, which yield needs.
-    assert "StemsPartitioningTableFraction" not in yld.frozen
+    # `frozen_exclude` un-freezes a parameter the yield target needs as a
+    # structural counterweight. Whether any is needed depends on which partitioning
+    # parameters are declared, so assert the consistency rather than a fixed name:
+    # excusing something that is not in the space is a silently dead config line.
+    cfg = cc.load_calib_config(CONFIG)
+    excluded = set(cfg["targets"]["yield"].get("frozen_exclude") or [])
+    space = set(yld.space.get("single_value_params") or {}) | \
+        set(yld.space.get("multi_value_params") or {})
+    assert excluded <= space, f"frozen_exclude names parameters not in the space: {excluded - space}"
+    for pid in excluded:
+        assert pid not in yld.frozen, f"{pid} is excused but still frozen"
 
 
 @test("no parameter is both frozen and calibratable")
@@ -297,12 +332,14 @@ def _():
     # Node 2 (DVS 1.3) raised above node 1 (DVS 1.0) is the violation, and it sits
     # inside both the bounds and the step limit.
     spec = cc.load_spec(CONFIG, "winter_wheat", "yield")
+    require_params(spec, "RUETableRUE")
     _, ids = proposal_check(spec, {"RUETableRUE": {"2": 4.2}})     # 3.5 -> 4.2, above 3.8
     assert "rue_declines_after_anthesis" in ids, ids
     _, ids = proposal_check(spec, {"RUETableRUE": {"2": 3.2}})     # a legitimate decrease
     assert "rue_declines_after_anthesis" not in ids, ids
 
     spec = cc.load_spec(CONFIG, "winter_rapeseed", "yield")
+    require_params(spec, "StorageOrgansPartitioningTableFraction")
     _, ids = proposal_check(spec, {"StorageOrgansPartitioningTableFraction": {"8": 0.4}})
     assert "storage_organ_non_decreasing" in ids, ids
 
@@ -310,6 +347,7 @@ def _():
 @test("N threshold ordering is enforced")
 def _():
     spec = cc.load_spec(CONFIG, "winter_wheat", "yield")
+    require_params(spec, "DVSNT", "DVSNLT")
     _, ids = proposal_check(spec, {"DVSNT": 1.15})   # DVSNLT is 1.3 -> ok
     assert "n_thresholds_ordered" not in ids
     _, ids = proposal_check(spec, {"DVSNLT": 1.05})  # DVSNT is 0.8 -> still ok
@@ -536,6 +574,154 @@ def _():
     production = spec.run.crop_dir / "data" / "crop" / "crop.xml"
     assert spec.crop_xml != production
     assert "runs_optim" in str(spec.crop_xml)
+
+
+# ---------------------------------------------------------------------------
+print("\nharvest index, translocation, disabling")
+
+
+@test("every declared parameter carries an explicit enabled switch")
+def _():
+    import yaml
+    cfg = yaml.safe_load(CONFIG.read_text())
+    missing = [f"{t}.{name}"
+               for t, tcfg in cfg["targets"].items()
+               for name, pc in (tcfg.get("parameters") or {}).items()
+               if "enabled" not in pc]
+    assert not missing, f"no enabled switch on: {missing}"
+    # A switch that is off must say why — otherwise the next reader cannot tell
+    # a deliberate exclusion from an accident.
+    for t, tcfg in cfg["targets"].items():
+        for name, pc in (tcfg.get("parameters") or {}).items():
+            if pc["enabled"] is False:
+                assert pc.get("disabled_reason"), f"{t}.{name} is off with no reason given"
+
+
+@test("toggling the switch adds and removes the parameter from the space")
+def _():
+    import yaml
+    cfg = yaml.safe_load(CONFIG.read_text())
+    base = yaml.safe_load((OPTIM_DIR / "config.yaml").read_text())
+
+    def space_for(target, tweak):
+        c = yaml.safe_load(CONFIG.read_text())
+        tweak(c["targets"][target]["parameters"])
+        out = Path(tempfile.mkdtemp())
+        (out / "calibration.yaml").write_text(yaml.safe_dump(c))
+        (out / "config.yaml").write_text(yaml.safe_dump(base))
+        spec = cc.load_spec(out / "calibration.yaml", "winter_wheat", target)
+        names = set(spec.space.get("single_value_params") or {}) | \
+            set(spec.space.get("multi_value_params") or {})
+        shutil.rmtree(out, ignore_errors=True)
+        return names
+
+    # Off: gone from the space. On: back, with no other parameter disturbed.
+    on = space_for("lai", lambda p: None)
+    off = space_for("lai", lambda p: p["RGRLAI"].__setitem__("enabled", False))
+    assert "RGRLAI" in on and "RGRLAI" not in off
+    assert on - {"RGRLAI"} == off, "disabling one parameter changed the others"
+
+    # And the reverse, on a parameter that ships disabled.
+    off_y = space_for("yield", lambda p: None)
+    on_y = space_for("yield", lambda p: p["YieldAdjustRatio"].__setitem__("enabled", True))
+    assert "YieldAdjustRatio" not in off_y and "YieldAdjustRatio" in on_y
+
+
+@test("a disabled parameter leaves the space and cannot be proposed")
+def _():
+    spec = cc.load_spec(CONFIG, "winter_wheat", "yield")
+    names = set(spec.space.get("single_value_params") or {}) | \
+        set(spec.space.get("multi_value_params") or {})
+    for pid in ("YieldAdjustRatio", "FreshratioStorageOrgan"):
+        assert pid not in names, f"{pid} is disabled and must not be in the space"
+        row = next(r for r in cc.describe_space(spec) if r["parameter"] == pid)
+        assert row["enabled"] is False and row["movable"] is False
+        assert row["note"], "a disabled parameter must carry the reason it was disabled"
+    # Refused at parse time, before any constraint is even consulted.
+    xml = spec.run.crop_dir / "data" / "crop" / "crop.xml"
+    current = cc.current_values(xml, spec.crop_name, spec.space)
+    try:
+        cc.normalise_proposal({"YieldAdjustRatio": 1.1}, current, spec.space)
+    except SystemExit as exc:
+        assert "not a calibratable parameter" in str(exc)
+        return
+    raise AssertionError("a disabled parameter must be refused")
+
+
+@test("FRTDM is calibratable for every crop, on bounds that fit all of them")
+def _():
+    values = {}
+    for crop in CROPS:
+        spec = cc.load_spec(CONFIG, crop, "yield")
+        assert "FRTDM" in (spec.space.get("single_value_params") or {}), crop
+        row = next(r for r in cc.describe_space(spec) if r["parameter"] == "FRTDM")
+        assert row["movable"], f"{crop}: FRTDM resolved immovable"
+        low, high = row["bounds"]
+        assert low <= row["value"] <= high, f"{crop}: {row['value']} outside {row['bounds']}"
+        values[crop] = row["value"]
+    # The spread is the reason the bounds are absolute rather than relative.
+    assert min(values.values()) < 0.05 < max(values.values()), values
+
+
+@test("yield metrics report harvest index and the translocation term")
+def _():
+    import objectives
+    rng = np.random.default_rng(5)
+    n = 240
+    biomass = rng.normal(16.0, 1.5, n)
+    df = pd.DataFrame({
+        "NUTS_ID": [f"DE{i % 30:02d}" for i in range(n)],
+        "STATE_NAME": ["Bayern", "Hessen"] * (n // 2),
+        "year": rng.integers(2000, 2020, n),
+        "ag_biomass_sim": biomass,
+        "yield_sim": biomass * 0.37,            # simulated HI = 0.37
+        "yield": biomass * 0.45,                # observations imply HI = 0.45
+    })
+    df["yield_translocated_sim"] = df["yield_sim"] + 0.8   # FRTDM adds 0.8 t/ha
+
+    loss, metrics = objectives.yield_loss_fn(df)
+    assert abs(metrics["harvest index (sim)"] - 0.37) < 0.01, metrics
+    assert abs(metrics["harvest index (required)"] - 0.45) < 0.01, metrics
+    assert metrics["HI bias"] < 0, "a low simulated HI must report a negative bias"
+    # Metrics are rounded to 4 dp for a readable ledger, so compare at that scale.
+    assert abs(metrics["mean translocated yield (t/ha)"]
+               - float(df["yield_translocated_sim"].mean())) < 1e-4
+    assert metrics["translocated / yield ratio"] > 1.0, "FRTDM adds to the storage organ"
+
+    # The objective itself must not move when the extra columns are present —
+    # otherwise every objective already in the ledger becomes incomparable.
+    bare = df.drop(columns=["ag_biomass_sim", "yield_translocated_sim"])
+    assert abs(objectives.yield_loss_fn(bare)[0] - loss) < 1e-12
+    assert "harvest index (sim)" not in objectives.yield_loss_fn(bare)[1]
+
+
+@test("the translocation diagnostic says whether FRTDM helps or overshoots")
+def _():
+    rng = np.random.default_rng(6)
+    n = 200
+    observed = rng.normal(7.0, 0.6, n)
+    base = dict(NUTS_ID=[f"DE{i % 25:02d}" for i in range(n)],
+                STATE_NAME=["Bayern"] * n, year=rng.integers(2000, 2020, n))
+
+    # (a) plain yield is 0.8 t/ha short; translocation closes the gap -> helps
+    helps = pd.DataFrame({**base, "yield": observed,
+                          "yield_sim": observed - 0.8,
+                          "Yield_translocated_t_ha": observed - 0.05})
+    d = cd._translocation_diagnostics(helps)
+    assert d["rmse_delta_translocated_minus_plain"] < 0, d
+    assert "worth calibrating" in d["verdict"], d["verdict"]
+
+    # (b) plain yield is right; translocation overshoots -> lower FRTDM
+    over = pd.DataFrame({**base, "yield": observed,
+                         "yield_sim": observed - 0.02,
+                         "Yield_translocated_t_ha": observed + 1.2})
+    d = cd._translocation_diagnostics(over)
+    assert d["rmse_delta_translocated_minus_plain"] > 0, d
+    assert "lower FRTDM" in d["verdict"], d["verdict"]
+
+    # (c) no translocation column at all -> reported as absent, not as an error
+    assert cd._translocation_diagnostics(
+        pd.DataFrame({**base, "yield": observed, "yield_sim": observed})) is None
 
 
 # ---------------------------------------------------------------------------
@@ -950,10 +1136,15 @@ def _():
 
 # ---------------------------------------------------------------------------
 def main() -> int:
-    failed = [(n, tb) for n, ok, tb in _results if not ok]
+    failed = [(n, tb) for n, status, tb in _results if status == "fail"]
+    skipped = [(n, why) for n, status, why in _results if status == "skip"]
+    passed = sum(1 for _, status, _ in _results if status == "pass")
     print(f"\n{'=' * 70}")
-    print(f"  {len(_results) - len(failed)}/{len(_results)} passed")
+    print(f"  {passed}/{len(_results) - len(skipped)} passed"
+          + (f", {len(skipped)} skipped (not in this configuration)" if skipped else ""))
     print("=" * 70)
+    for name, why in skipped:
+        print(f"  skipped: {name} — {why}")
     for name, tb in failed:
         print(f"\n--- {name} ---\n{tb}")
     return 1 if failed else 0
