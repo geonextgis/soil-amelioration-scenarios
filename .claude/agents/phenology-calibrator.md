@@ -59,7 +59,17 @@ near-constant amount across years, while a `TSUM1` error varies with the
 emergence-to-anthesis weather. Large median bias with small spread across years →
 `TSUMEM`. Large spread → `TSUM1`.
 
-Two structural signals override both:
+Three structural signals override both:
+
+- **residual varies with winter warmth** — vernalisation, and only for the crops
+  that have it (`VBASE` / `VERSAT` are in `status` only where the crop.xml defines
+  them *and* the solution wires them into the LINTUL5 Phenology component; today
+  that is winter wheat). Insufficient vernalisation delays anthesis, so the
+  signature is flowering late in MILD winters, right in cold ones, worsening from
+  north to south. Lower `VERSAT` to shorten the cold requirement, raise it to
+  delay; `VBASE` is the smaller second lever and must stay below `VERSAT`. `TSUM1`
+  cannot express this — it shifts every year equally, so using it here fixes the
+  mild years and breaks the cold ones. Check the by-year table before concluding.
 
 - **residual scales with season warmth** (`vs_season_warmth_slope` — the flowering
   residual regressed against the observed flowering DOY, where an early

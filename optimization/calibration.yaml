@@ -101,6 +101,12 @@ frozen_groups:
     - TsumIncrementTableRate
     - DVSI
     - DVSEND
+    # Vernalisation. Only winter wheat defines these (and only its solution wires
+    # them into the LINTUL5 Phenology component); a crop that does not define one
+    # simply drops out of the freeze snapshot.
+    - VBASE
+    - VERSAT
+    - VERNRT
 
   # DVS node grids of the response tables. The *values* on these grids are
   # calibratable; moving the grid itself would silently re-index every table and
@@ -218,6 +224,50 @@ targets:
           residual, never on the raw maturity date: a maturity bias that matches
           the flowering bias is a TSUM1 problem, and only the part that does not
           is a TSUM2 problem.
+      # -- vernalisation -----------------------------------------------------
+      # Winter crops only, and only where the crop.xml defines them AND the
+      # solution wires them into the LINTUL5 Phenology component — today that is
+      # winter wheat alone. For every other crop they resolve as absent, stay out
+      # of the space, and are reported as such by `calibrate.py status`.
+      VBASE:
+        enabled: true
+        kind: scalar
+        type: float
+        mode: absolute
+        low: 0.0
+        high: 30.0
+        precision: 1
+        controls: [vernalisation_onset, flowering_timing]
+        coupled_with: [VERSAT]
+        meaning: >-
+          Base vernalisation requirement, in effective vernalising days: below it
+          no vernalisation counts towards development at all. Together with VERSAT
+          it sets the vernalisation response, which scales roughly as
+          (V - VBASE) / (VERSAT - VBASE). Raising it makes the crop harder to
+          vernalise and so delays anthesis, with the delay concentrated in mild
+          winters — the site-years that accumulate vernalising days slowly. Must
+          stay below VERSAT.
+      VERSAT:
+        enabled: true
+        kind: scalar
+        type: float
+        mode: absolute
+        low: 20.0
+        high: 90.0
+        precision: 1
+        controls: [vernalisation_requirement, flowering_timing]
+        coupled_with: [VBASE]
+        meaning: >-
+          Saturated vernalisation requirement, in effective vernalising days: the
+          cold accumulation at which vernalisation is complete and development
+          proceeds on thermal time alone. THE vernalisation lever on flowering
+          date. Its signature is what separates it from TSUM1: a TSUM1 error is a
+          flowering bias of similar size in every year, while a vernalisation
+          error is late in MILD winters and near zero in cold ones, and grows from
+          north to south. Check that before moving it. Winter wheat cultivars
+          measure roughly 30-70 d; a value near the low end is effectively a
+          spring type.
+
       TsumIncrementTableRate:
         enabled: true
         kind: table
@@ -255,6 +305,13 @@ targets:
         note: >-
           The base temperature must be below the effective maximum, or the
           thermal-time integral is undefined.
+      - id: vernalisation_base_below_saturation
+        type: ordering
+        rule: VBASE < VERSAT
+        note: >-
+          The base vernalisation requirement must be below the saturated one, or
+          the vernalisation fraction (V - VBASE) / (VERSAT - VBASE) is undefined.
+          Silently skipped for a crop that defines neither.
       - id: photoperiod_factor_non_decreasing
         type: table_monotone
         param: PhotoperiodTableFactor

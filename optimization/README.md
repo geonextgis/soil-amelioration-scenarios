@@ -356,9 +356,16 @@ five crops even though their SLA tables have 8 (wheat), 5 (rapeseed), 3 (potato)
 nodes. Table parameters expand to one bound per element actually present. A value
 that is structurally zero (leaf allocation after anthesis) stays pinned at zero.
 
-The stage-1 thermal-time parameters are the exception: they use `mode: absolute`
-with physiological ranges, because that stage is calibrated from scratch and must
-not be tethered to whatever is in the file today.
+The stage-1 thermal-time and vernalisation parameters are the exception: they use
+`mode: absolute` with physiological ranges, because that stage is calibrated from
+scratch and must not be tethered to whatever is in the file today.
+
+A parameter the crop does not define drops out of the space automatically —
+`VBASE` / `VERSAT` are calibrated for the crops whose `crop.xml` declares them and
+whose solution wires them into the LINTUL5 `Phenology` component (today winter
+wheat), and are reported as *absent for this crop* everywhere else. The self-test
+catches the other case: a parameter declared in `calibration.yaml` but defined by
+no crop at all is a typo.
 
 ### Turning a parameter off
 

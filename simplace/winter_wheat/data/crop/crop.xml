@@ -12,17 +12,24 @@
     <parameter id="TSUMEM" description="temperature sum from sowing to emergence" unit="http://www.wurvoc.org/vocabularies/om-1.8/degree_Celsius_day">60.</parameter>
 
     <!-- Phenology -->
-    <parameter id="IDSL" description="indicates wheather pre-anthesis development depends on temp. (=0) or both temperature and daylengt (=1)" unit="-">0</parameter>
+    <parameter id="IDSL" description="indicates wheather pre-anthesis development depends on temp. (=0) or both temperature and daylengt (=1)" unit="-">2</parameter>
+    
+    <parameter id="VERSAT" description="satured vernalisation requirement" unit="d">70</parameter>
+	  <parameter id="VBASE" description="base vernalisation requirement" unit="d">14</parameter>
+	  <parameter id="VERNRT" description="" unit="">
+	    <value>-10.</value>	 <value>0.</value>	
+	    <value>-4.</value>	 <value>0.</value>	
+		  <value>3.</value>	 <value>1.</value>	
+	    <value>10.</value>	 <value>1.</value>	 
+	    <value>17.</value>	 <value>0.</value>	
+	    <value>30.</value>	 <value>0.</value>  		
+	</parameter>
     <parameter id="PhotoperiodTableHour" description="correction factor of development rate in dependence of day length [h;-]" unit="http://www.wurvoc.org/vocabularies/om-1.8/one">
       <value>0</value>
-      <value>8</value>
-      <value>12</value>
-      <value>18</value>
+      <value>17</value>
     </parameter>
     <parameter id="PhotoperiodTableFactor" description="correction factor of development rate in dependence of day length [h;-]" unit="http://www.wurvoc.org/vocabularies/om-1.8/one">
       <value>0</value>
-      <value>1</value>
-      <value>1</value>
       <value>1</value>
     </parameter>
     <parameter id="TSUM1" description="temperature sum from emergance to anthesis" unit="http://www.wurvoc.org/vocabularies/om-1.8/degree_Celsius_day">1280</parameter>

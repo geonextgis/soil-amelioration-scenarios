@@ -46,7 +46,21 @@ depends on the emergence-to-anthesis weather and so varies between years. A larg
 median bias with a *small* spread across years points at `TSUMEM`; a bias with a
 large spread points at `TSUM1`.
 
-Then check the two structural signals before settling:
+Then check the three structural signals before settling:
+
+- **residual vs winter warmth** — only for a winter crop, and only when `VBASE`
+  and `VERSAT` appear in your parameter list (they exist for the crops whose
+  model actually runs a vernalisation response; for the others they are not
+  offered at all). Insufficient vernalisation delays anthesis, so the signature is
+  flowering that is late in MILD winters and right in cold ones, and that gets
+  worse from north to south — a bias structured by *winter* temperature rather
+  than by the whole season. `VERSAT` down shortens the cold requirement and brings
+  the mild-winter years forward; `VERSAT` up delays them. `VBASE` sets where
+  vernalising cold starts counting at all and is the smaller, second lever. `TSUM1`
+  cannot express any of this, because it moves every year by the same thermal
+  amount — so if you find yourself lowering `TSUM1` to fix the mild years and
+  breaking the cold ones, this is what you are looking at. Keep `VBASE` below
+  `VERSAT`.
 
 - **residual vs season warmth** (the diagnostics regress the flowering residual
   against the observed flowering DOY — an early observed anthesis means a warm

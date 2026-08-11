@@ -174,14 +174,27 @@ def _():
 
 @test("space resolves for every crop and target")
 def _():
+    # A parameter may legitimately be absent for a crop (vernalisation exists only
+    # for the winter crops that wire it), but one that is absent for *every* crop
+    # is a typo in calibration.yaml that would otherwise never be noticed.
+    present_somewhere = set()
     for crop in CROPS:
         for target in TARGETS:
             spec = cc.load_spec(CONFIG, crop, target)
             names = list(spec.space.get("single_value_params") or {}) + \
                 list(spec.space.get("multi_value_params") or {})
             assert names, f"{crop}/{target} resolved an empty space"
-            missing = [p for p, m in spec.meta.items() if not m.get("present")]
-            assert not missing, f"{crop}/{target} parameters absent from crop.xml: {missing}"
+            present_somewhere |= {p for p, m in spec.meta.items() if m.get("present")}
+            for pid, m in spec.meta.items():
+                if not m.get("present"):
+                    assert m.get("note"), f"{crop}/{target}: {pid} absent with no explanation"
+
+    declared = set()
+    cfg = cc.load_calib_config(CONFIG)
+    for target in TARGETS:
+        declared |= set(cfg["targets"][target].get("parameters") or {})
+    nowhere = declared - present_somewhere
+    assert not nowhere, f"declared but defined by no crop (typo?): {sorted(nowhere)}"
 
 
 @test("table bounds match each crop's own table length")
@@ -879,6 +892,58 @@ def _():
         widths[crop] = (low, high)
     # Absolute bounds mean every crop searches the same physiological range.
     assert len(set(widths.values())) == 1, widths
+
+
+@test("vernalisation is calibratable where the crop has it, and absent elsewhere")
+def _():
+    # VBASE/VERSAT exist only for crops whose crop.xml defines them AND whose
+    # solution wires them into the LINTUL5 Phenology component. For the others the
+    # space must exclude them silently rather than offering a lever that writes to
+    # nothing.
+    wheat = cc.load_spec(CONFIG, "winter_wheat", "phenology")
+    space = wheat.space.get("single_value_params") or {}
+    for pid in ("VBASE", "VERSAT"):
+        assert pid in space, f"{pid} must be calibratable for winter_wheat"
+        row = next(r for r in cc.describe_space(wheat) if r["parameter"] == pid)
+        assert row["movable"], row
+        low, high = row["bounds"]
+        assert low <= row["value"] <= high, row
+
+    solution = (wheat.run.crop_dir / "solution" / "solution.sol.xml").read_text()
+    assert 'source="crop.VBASE"' in solution and 'source="crop.VERSAT"' in solution, \
+        "winter_wheat's solution must actually consume them, or they are inert"
+
+    for crop in CROPS:
+        spec = cc.load_spec(CONFIG, crop, "phenology")
+        defined = cc.read_param(cc.crop_root(spec.run.crop_dir / "data" / "crop" / "crop.xml"),
+                                spec.crop_name, "VERSAT") is not None
+        names = set(spec.space.get("single_value_params") or {})
+        assert ("VERSAT" in names) == defined, f"{crop}: space and crop.xml disagree"
+        # Frozen in stage 2 either way: a crop that gains them later must not have
+        # them silently moved by the growth stage.
+        assert "VERSAT" in cc.load_spec(CONFIG, crop, "growth").frozen
+
+
+@test("the vernalisation pair must stay ordered, and the rule is skipped where absent")
+def _():
+    spec = cc.load_spec(CONFIG, "winter_wheat", "phenology")
+    xml = spec.run.crop_dir / "data" / "crop" / "crop.xml"
+    current = cc.current_values(xml, spec.crop_name, spec.space)
+    require_params(spec, "VBASE", "VERSAT")
+
+    # Saturation pushed below the base -> the response fraction is undefined.
+    _, ids = proposal_check(spec, {"VBASE": round(float(current["VERSAT"]) + 1.0, 1)}, xml)
+    assert "vernalisation_base_below_saturation" in ids, ids
+    # A small, ordered move must pass.
+    violations, _ = proposal_check(
+        spec, {"VERSAT": round(float(current["VERSAT"]) * 0.9, 1)}, xml)
+    assert not violations, [v.message for v in violations]
+
+    # For a crop that defines neither, the rule must stay quiet rather than fire on
+    # two missing values.
+    other = cc.load_spec(CONFIG, "maize", "phenology")
+    violations, ids = proposal_check(other, {})
+    assert "vernalisation_base_below_saturation" not in ids, [v.message for v in violations]
 
 
 @test("phenology constraints catch an inverted temperature pair")
