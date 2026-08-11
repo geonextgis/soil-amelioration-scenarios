@@ -11,10 +11,30 @@
 # Both go through optimization/calibrate.py, so the guard rails, the ledger and
 # the objective are identical whoever is deciding.
 #
-# `extends` pulls crops / climate / slurm / input_profiles / target run
-# definitions from config.yaml so the cluster settings and the per-crop
-# dm_fraction live in exactly one place.
+# `extends` pulls crops / climate / slurm / input_profiles / the per-target run
+# definitions (views) from config.yaml, so nothing is declared twice.
 extends: config.yaml
+
+# ---------------------------------------------------------------------------
+# The workflow: two stages, in this order.
+#
+#   1. phenology   calibrated from scratch, on its own.
+#                  Everything downstream is dated off DVS, so a canopy or a yield
+#                  parameter tuned against a wrong development clock is tuned
+#                  against noise. This stage owns the thermal-time parameters and
+#                  nothing else.
+#
+#                       calibrate.py promote --target phenology --yes
+#                       calibrate.py handoff        (seeds stage 2)
+#
+#   2. growth      LAI and yield calibrated JOINTLY, with the stage-1 phenology
+#                  frozen. They are not separable: RUE, KDIF and the partitioning
+#                  tables move biomass and leaf area at the same time, so a yield
+#                  fix silently re-writes the canopy and vice versa. One iteration
+#                  therefore runs BOTH views (the GLASS-LAI point set and the
+#                  district yield point set) from the same crop.xml and scores a
+#                  single combined objective.
+# ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
 # Bound modes
@@ -26,8 +46,11 @@ extends: config.yaml
 #                    This is what makes the space crop-agnostic: wheat's SLA
 #                    table has 8 nodes, rapeseed 5, potato 3 — relative bounds
 #                    fit whatever is actually in that crop's crop.xml.
-#   mode: absolute   low/high given literally (used where a value has a
-#                    meaning independent of the crop, e.g. a DVS threshold).
+#   mode: absolute   low/high given literally, independent of the starting value.
+#                    Used where a value has a meaning of its own (a DVS
+#                    threshold), and for the stage-1 thermal-time parameters,
+#                    which are calibrated from scratch and must not be tethered
+#                    to whatever happens to be in crop.xml today.
 #
 # `kind: table` expands to one bound per <value> element actually present.
 # ---------------------------------------------------------------------------
@@ -61,12 +84,11 @@ extends: config.yaml
 # indirect drift; use `enabled: false` for "not this study".
 # ---------------------------------------------------------------------------
 
-# Parameter groups that a target may declare frozen. `lai_calibrated` is
-# resolved dynamically to every parameter id under targets.lai.parameters.
+# Parameter groups a target may declare frozen.
 frozen_groups:
-  phenology:
-    # The optimized phenology set. These drive DVS progression and nothing else;
-    # they were calibrated in a previous phase and are treated as ground truth.
+  # The stage-1 result. Frozen for stage 2: these drive DVS progression, and the
+  # whole point of calibrating phenology first is that stage 2 can trust the clock.
+  phenology_parameters:
     - TBASEM
     - TEFFMX
     - TSUMEM
@@ -79,9 +101,11 @@ frozen_groups:
     - TsumIncrementTableRate
     - DVSI
     - DVSEND
-    # DVS node grids of the response tables. The *values* on these grids are
-    # calibratable; moving the grid itself would silently re-index every table
-    # and break the DVS-bin diagnostics the agent reasons with.
+
+  # DVS node grids of the response tables. The *values* on these grids are
+  # calibratable; moving the grid itself would silently re-index every table and
+  # break the DVS-bin diagnostics the agent reasons with. Frozen in both stages.
+  response_table_grids:
     - SLATableDVS
     - RUETableDVS
     - KDIFTableDVS
@@ -89,56 +113,33 @@ frozen_groups:
     - StemsPartitioningTableDVS
     - StorageOrgansPartitioningTableDVS
     - RootsPartitioningTableDVS
+    - RDRLeavesTableMeanTemp
 
 # ---------------------------------------------------------------------------
 targets:
   # =========================================================================
-  # PHENOLOGY — anthesis and maturity date against DWD observations
+  # STAGE 1 — PHENOLOGY: anthesis and maturity date against DWD observations.
   #
-  #   *** ALREADY OPTIMIZED FOR ALL FIVE CROPS. PROTECTED. ***
+  # Calibrated from scratch. The bounds on the thermal-time parameters are
+  # absolute and physiological rather than relative to the current crop.xml, so
+  # the calibration is not anchored on whatever values happen to be in the file.
   #
-  # The values in simplace/<crop>/data/crop/crop.xml are the result of a
-  # completed calibration phase and are treated as ground truth by the LAI and
-  # yield targets, which list them under `frozen_groups.phenology`.
-  #
-  # This target exists so the phenology agent can still do three things:
-  #
-  #   1. VALIDATE   — score the optimized set against the observations, report
-  #                   flowering/maturity bias and where it is structured. This
-  #                   is the default and it changes nothing.
-  #   2. RECALIBRATE — for a *new* crop, or after the observation set changes.
-  #                   Requires an explicit --allow-recalibration flag; without
-  #                   it calibrate.py refuses to write any parameter here.
-  #   3. RE-VERIFY  — confirm the optimized values are still what is on disk,
-  #                   via optimized_baseline.json (written on first use and
-  #                   diffed on every iteration).
-  #
-  # `protected: true` is what enforces (1)+(2). `frozen:` is empty because a
-  # recalibration must be able to move these — the protection is the gate, not
-  # a freeze.
+  # objective = mean( RMSE(flowering DOY), RMSE(maturity DOY) )   in days
   # =========================================================================
   phenology:
-    exp_name: CALIB_PHENOLOGY
-    run_subdir: calib_phenology
-    project_csv: project/project_{crop}.csv
-    inputs: production
-    objective: phenology_rmse_days
-    protected: true
-    protected_note: >-
-      Phenology is already optimized for every crop in this repo. Run this target
-      to validate or to recalibrate a new crop; pass --allow-recalibration to
-      write. The optimized values are recorded in optimized_baseline.json before
-      the first change and diffed on every iteration.
-    frozen: []
-    subset:
-      n_locations: 400
-      year_start: 1995
-      year_end: 2022
+    objective:
+      name: phenology_rmse_days
+      components:
+        phenology:
+          weight: 1.0
+          # scale 1.0 -> the objective IS the RMSE in days.
+          scale: 1.0
+    frozen: [response_table_grids]
 
     stopping:
       max_iterations: 100
-      # Mean of the flowering and maturity RMSE, in days. Below ~6 days the error
-      # is comparable to the reporting resolution of the DWD phenology network.
+      # Below ~6 days the error is comparable to the reporting resolution of the
+      # DWD phenology network.
       target_objective: 6.0
       min_improvement: 0.5
       patience: 20
@@ -148,9 +149,9 @@ targets:
         enabled: true
         kind: scalar
         type: float
-        mode: relative
-        factor: [0.6, 1.6]
-        clip: [30.0, 400.0]
+        mode: absolute
+        low: 30.0
+        high: 400.0
         precision: 1
         controls: [emergence_timing]
         meaning: >-
@@ -192,9 +193,9 @@ targets:
         enabled: true
         kind: scalar
         type: float
-        mode: relative
-        factor: [0.75, 1.3]
-        clip: [400.0, 2000.0]
+        mode: absolute
+        low: 400.0
+        high: 2000.0
         precision: 0
         controls: [flowering_timing]
         meaning: >-
@@ -206,9 +207,9 @@ targets:
         enabled: true
         kind: scalar
         type: float
-        mode: relative
-        factor: [0.75, 1.3]
-        clip: [300.0, 2000.0]
+        mode: absolute
+        low: 300.0
+        high: 2000.0
         precision: 0
         controls: [grain_filling_duration]
         meaning: >-
@@ -280,36 +281,55 @@ targets:
         max_fraction: 0.25
 
   # =========================================================================
-  # LAI  — canopy development against GLASS-LAI retrievals
+  # STAGE 2 — GROWTH: canopy (GLASS-LAI) and yield (district statistics),
+  # calibrated together from one crop.xml.
+  #
+  # Why jointly and not one after the other:
+  #
+  #   * RUE, KDIF and the partitioning tables set biomass AND leaf area. Calibrate
+  #     yield after LAI and every accepted yield change quietly degrades the
+  #     canopy; freeze the LAI set to prevent that and most of the yield levers
+  #     are gone with it.
+  #   * SLA and leaf partitioning set leaf area AND how much assimilate is left
+  #     for the storage organ, so an LAI-only calibration bakes in a yield error
+  #     it cannot see.
+  #
+  # One iteration runs both views and is scored on
+  #
+  #   objective = ( w_lai * RMSE_lai / scale_lai
+  #                 + w_yield * RMSE_yield / scale_yield ) / (w_lai + w_yield)
+  #
+  # `scale` is the RMSE at which a component counts as 1.0, i.e. its own target,
+  # so the combined objective is dimensionless and <= 1.0 means both goals are met
+  # on average. The per-component RMSEs are recorded and reported unchanged.
   # =========================================================================
-  lai:
-    exp_name: CALIB_LAI
-    run_subdir: calib_lai
-    # The LAI calibration table: one 2-year window per GLASS-LAI point. Its point
-    # set and weather grid differ from the baseline table, hence `inputs: lai`.
-    project_csv: project/project_{crop}_LAI.csv
-    inputs: lai
-    objective: lai_rmse_dvs_binned
-    frozen: [phenology]
-
-    # Smaller than the run default in config.yaml (400): an agentic iteration is a
-    # decision point, not a sample, so wall time per iteration matters more than
-    # the last bit of spatial coverage. Override per invocation with --locations.
-    subset:
-      n_locations: 400
-      year_start: null
-      year_end: null
+  growth:
+    objective:
+      name: joint_lai_yield
+      components:
+        lai:
+          weight: 0.5
+          # DVS-binned LAI RMSE (m2/m2). Below this it is inside the noise of the
+          # GLASS retrievals.
+          scale: 0.15
+        yield:
+          weight: 0.5
+          # Mean of the yearly-mean and state-mean yield RMSE (t/ha DM).
+          scale: 0.50
+    frozen: [phenology_parameters, response_table_grids]
 
     stopping:
       max_iterations: 100
-      # Below this the DVS-binned RMSE is inside the noise of the GLASS retrievals.
-      target_objective: 0.15
-      # An iteration counts as an improvement only if it beats the best by this.
+      # 1.0 = both components at their `scale` on average.
+      target_objective: 1.0
+      # An iteration counts as an improvement only if it beats the best by this,
+      # on the combined (dimensionless) objective.
       min_improvement: 0.01
       # Stop after this many consecutive non-improving iterations.
       patience: 20
 
     parameters:
+      # -- canopy: level and timing of leaf area ---------------------------
       RGRLAI:
         enabled: true
         kind: scalar
@@ -324,7 +344,8 @@ targets:
           phase, before the canopy is source-limited. Raise it if simulated LAI
           lags the observations early (DVS < 0.5) but the peak is right; lower it
           if the canopy closes too fast. Has almost no effect after the crop
-          switches to SLA-driven leaf area expansion.
+          switches to SLA-driven leaf area expansion, and little on yield except
+          through early light interception.
       TDWI:
         enabled: true
         kind: scalar
@@ -351,42 +372,14 @@ targets:
         controls: [peak_lai, curve_shape, senescence_level]
         meaning: >-
           Specific leaf area (m2 leaf per g leaf dry matter) as a function of DVS,
-          on the frozen SLATableDVS grid. This is the direct lever on LAI *level*
-          at each phenological stage: LAI = leaf weight x SLA. Element i maps
-          one-to-one onto DVS bin i of the diagnostics table, so a per-bin bias in
-          the diagnostics points straight at the element to move. Keep the profile
-          smooth — SLA physically declines from young to mature leaves.
-      LeavesPartitioningTableFraction:
-        enabled: true
-        kind: table
-        type: float
-        mode: relative
-        factor: [0.7, 1.35]
-        clip: [0.0, 1.0]
-        precision: 4
-        controls: [peak_lai, rise_rate]
-        coupled_with: [StemsPartitioningTableFraction]
-        meaning: >-
-          Fraction of above-ground dry matter allocated to leaves, by DVS. Changes
-          LAI through leaf *weight* rather than through SLA, and unlike SLA it also
-          changes the stem/storage pool, so it moves biomass and yield too. Only
-          use it when SLA alone cannot reconcile peak LAI with observed biomass.
-          Leaves + stems + storage organs must still sum to 1 at every shared DVS
-          node — adjust StemsPartitioningTableFraction by the opposite amount.
-      StemsPartitioningTableFraction:
-        enabled: true
-        kind: table
-        type: float
-        mode: relative
-        factor: [0.7, 1.35]
-        clip: [0.0, 1.0]
-        precision: 4
-        controls: [partitioning_balance]
-        coupled_with: [LeavesPartitioningTableFraction]
-        meaning: >-
-          Fraction of above-ground dry matter to stems, by DVS. In this workflow it
-          exists as the counterweight to the leaf fraction: it is what keeps the
-          above-ground partitioning summing to 1 when leaf allocation is changed.
+          on the frozen SLATableDVS grid. The direct lever on LAI *level* at each
+          phenological stage: LAI = leaf weight x SLA. Element i maps one-to-one
+          onto DVS bin i of the LAI diagnostics table, so a per-bin bias points
+          straight at the element to move. It changes leaf AREA without moving
+          assimilate, so it is the cheapest way to fix LAI when yield is already
+          acceptable — the yield response is only the indirect one through light
+          interception. Keep the profile smooth: SLA physically declines from
+          young to mature leaves.
       LAICR:
         enabled: true
         kind: scalar
@@ -428,7 +421,8 @@ targets:
           RDRLeavesTableMeanTemp grid (cold -> warm). Governs how fast the canopy
           declines after DVSDLT. Raise the warm-end elements when simulated
           senescence is too slow; the cold-end elements mostly affect
-          overwintering canopy loss in the winter crops.
+          overwintering canopy loss in the winter crops. A canopy that dies early
+          also stops filling grain, so watch the yield component when moving it.
       DVSDLT:
         enabled: true
         kind: scalar
@@ -439,10 +433,11 @@ targets:
         precision: 3
         controls: [senescence_timing]
         meaning: >-
-          Development stage at which temperature-driven leaf death begins. This is
-          the timing lever for senescence onset. It is a *threshold on* DVS, not a
+          Development stage at which temperature-driven leaf death begins. The
+          timing lever for senescence onset. It is a *threshold on* DVS, not a
           driver of DVS, so it does not touch the frozen phenology. Lower it when
-          the simulated canopy stays green too long after anthesis.
+          the simulated canopy stays green too long after anthesis; raising it
+          lengthens the effective grain-filling window.
       RDRNS:
         enabled: true
         kind: scalar
@@ -471,82 +466,7 @@ targets:
           selectively — on dry sites and dry years. Use it when the residual
           pattern correlates with TRANRF rather than with DVS.
 
-    constraints:
-      - id: sla_profile_smooth
-        type: table_smoothness
-        param: SLATableSLA
-        max_ratio: 1.9
-        note: >-
-          Adjacent SLA nodes may not differ by more than this factor. A saw-toothed
-          SLA profile produces a physically meaningless LAI trajectory that the
-          DVS-binned RMSE cannot see.
-      - id: sla_declines_to_maturity
-        type: table_endpoint_order
-        param: SLATableSLA
-        rule: last_le_max
-        tolerance: 0.0005
-        note: SLA at maturity must not exceed the profile maximum — old leaves are thicker.
-      - id: leaf_rdr_non_decreasing_with_temp
-        type: table_monotone
-        param: RDRLeavesTableRelativeRate
-        direction: non_decreasing
-        tolerance: 1.0e-6
-        note: Leaf death rate must not fall as mean temperature rises.
-      - id: above_ground_partitioning_sums_to_one
-        type: partition_sum
-        tables:
-          - LeavesPartitioningTable
-          - StemsPartitioningTable
-          - StorageOrgansPartitioningTable
-        tolerance: 0.005
-        note: >-
-          Above-ground allocation must sum to 1 at every DVS node where it already
-          did. Checked against the pre-change profile so the existing
-          differing-grid artifacts in some crops are not reported as new breakage.
-      - id: small_steps
-        type: max_changed
-        limit: 3
-        max_elements: 4
-        note: >-
-          At most 3 parameters (a table counts as one) and at most 4 individual
-          table elements per iteration, so the effect of a change is attributable.
-      - id: bounded_step_size
-        type: relative_step
-        max_fraction: 0.5
-        note: No single value may move more than 50% of its previous value in one iteration.
-
-  # =========================================================================
-  # YIELD — district yields, starting from the LAI-calibrated crop.xml
-  # =========================================================================
-  yield:
-    exp_name: CALIB_YIELD
-    run_subdir: calib_yield
-    project_csv: project/project_{crop}.csv
-    inputs: production
-    objective: yield_rmse_temporal_spatial
-    # The LAI set is frozen here so improving yield cannot quietly undo the LAI
-    # calibration. Parameters below that still perturb LAI carry `affects_lai`
-    # and require `calibrate.py verify-lai` before the result is promoted.
-    frozen: [phenology, lai_calibrated]
-    # The stem fraction sits in the LAI space only as the counterweight that keeps
-    # above-ground allocation summing to 1. Freezing it here would make the
-    # storage-organ fraction unmovable, so it is excused — the closure constraint
-    # below is what actually keeps it honest.
-    # frozen_exclude: [StemsPartitioningTableFraction]
-    frozen_exclude: []
-
-    subset:
-      n_locations: 400
-      year_start: 2000
-      year_end: 2023
-
-    stopping:
-      max_iterations: 100
-      target_objective: 0.5
-      min_improvement: 0.01
-      patience: 20
-
-    parameters:
+      # -- assimilation: how much biomass is made --------------------------
       RUETableRUE:
         enabled: true
         kind: table
@@ -556,131 +476,17 @@ targets:
         clip: [0.2, 6.0]
         precision: 3
         affects_lai: true
-        controls: [biomass_level]
+        controls: [biomass_level, peak_lai]
         meaning: >-
           Radiation use efficiency (g dry matter per MJ intercepted PAR) by DVS, on
           the frozen RUETableDVS grid. The primary lever on total above-ground
           biomass, and therefore on yield whenever the harvest index is already
-          right. Element 0-1 (emergence to anthesis) sets the biomass the crop
-          brings into grain filling; later elements set how much is still being
-          fixed during grain filling. Raising RUE also raises leaf weight and hence
-          LAI — run verify-lai after changing it.
-
-      FRTDM:
-        enabled: true
-        kind: scalar
-        type: float
-        # Absolute, not relative: the five crops start anywhere from 0.01
-        # (rapeseed) to 0.2 (spring barley), and relative bounds around 0.01 would
-        # pin rapeseed to a range far too narrow to test the mechanism at all.
-        mode: absolute
-        low: 0.0
-        high: 0.35
-        precision: 3
-        controls: [translocation, harvest_index]
-        meaning: >-
-          Fraction of pre-anthesis above-ground biomass available for
-          remobilisation to the storage organ. This is the one translocation
-          parameter the solution actually consumes — it is the input to the
-          BiomassTranslocation component, whose result is reported separately as
-          Yield_translocated_t_ha. Raising it moves assimilate laid down in leaves
-          and stems before anthesis into the grain, which raises the harvest index
-          WITHOUT changing total above-ground biomass. That makes it the right
-          lever when biomass is plausible, the harvest index is not, and the
-          partitioning tables are a step function that cannot be moved. Read the
-          `translocation` block of the diagnostics before touching it: it scores
-          Yield_t_ha and Yield_translocated_t_ha against the same observed
-          district yields and says whether the remobilisation term is currently
-          helping or overshooting. Measured remobilisation in small-grain cereals
-          is roughly 10-25% of pre-anthesis assimilate.
-
-      # ---------------------------------------------------------------------
-      # Disabled — kept as documentation rather than deleted.
-      #
-      # `enabled: false` removes a parameter from the space entirely: it cannot be
-      # proposed (a proposal naming it is refused at parse time), it is not shown
-      # to the agent as changeable, and `calibrate.py status` lists it with the
-      # reason. Deleting the block would have the same calibration effect and lose
-      # the finding, which is why these two stay here.
-      #
-      # Both are declared under the `crop` resource in solution.sol.xml but are
-      # taken as an input by no simcomponent, so writing them changes nothing in
-      # the simulation. Any objective movement while calibrating them would be
-      # noise being read as signal.
-      # ---------------------------------------------------------------------
-      YieldAdjustRatio:
-        enabled: false
-        disabled_reason: >-
-          declared in solution.sol.xml but consumed by no simcomponent (verified by
-          grep for source="crop.YieldAdjustRatio") — changing it cannot change any
-          simulated value
-        kind: scalar
-        type: float
-        mode: absolute
-        low: 0.8
-        high: 1.2
-        precision: 3
-        controls: [yield_scale]
-        meaning: >-
-          Intended as a multiplicative correction on reported yield. Inert in this
-          solution. If it is ever wired up, treat it as the last resort: it changes
-          nothing inside the growth simulation, so it can only remove a uniform
-          offset, never a pattern.
-
-      FreshratioStorageOrgan:
-        enabled: false
-        disabled_reason: >-
-          declared in solution.sol.xml but consumed by no simcomponent — changing
-          it cannot change any simulated value; the per-crop `dm_fraction` in
-          config.yaml is what actually puts observed yield on a dry-matter basis
-        kind: scalar
-        type: float
-        mode: absolute
-        low: 0.75
-        high: 0.95
-        precision: 3
-        controls: [yield_scale, moisture_basis]
-        meaning: >-
-          Intended as the dry-matter fraction converting storage-organ weight to
-          the reported yield basis (~0.86 = 14% moisture for cereals). Inert in
-          this solution.
-
-      StorageOrgansPartitioningTableFraction:
-        enabled: true
-        kind: table
-        type: float
-        mode: relative
-        factor: [0.7, 1.3]
-        clip: [0.0, 1.0]
-        precision: 4
-        affects_lai: true
-        coupled_with: [StemsPartitioningTableFraction]
-        controls: [harvest_index]
-        meaning: >-
-          Fraction of above-ground dry matter routed to the storage organ (grain,
-          tuber, seed), by DVS. This is the harvest-index lever. Use it when
-          simulated AGBiomass matches the observations but yield does not — i.e.
-          when the diagnostics attribute the error to HI rather than to biomass.
-          Must stay consistent with leaves + stems at every shared DVS node.
-      StemsPartitioningTableFraction:
-        enabled: true
-        kind: table
-        type: float
-        mode: relative
-        factor: [0.7, 1.3]
-        clip: [0.0, 1.0]
-        precision: 4
-        affects_lai: true
-        coupled_with: [StorageOrgansPartitioningTableFraction]
-        controls: [partitioning_balance]
-        meaning: >-
-          Fraction of above-ground dry matter to stems, by DVS. Present in this
-          target only as the counterweight to the storage-organ fraction: moving
-          assimilate into the grain has to take it from somewhere, and after
-          anthesis the stem pool is where it comes from. Note that in crops whose
-          crop.xml has a hard 0->1 step at anthesis (winter wheat, spring barley)
-          both tables are pinned at their end points, and the harvest index has to
-          be reached through RUE and YieldAdjustRatio instead.
+          right. Elements at DVS 0-1 set the biomass the crop brings into grain
+          filling; later elements set how much is still being fixed during it.
+          Raising RUE also raises leaf weight and hence LAI — in this joint stage
+          that shows up immediately in the LAI component, so use it when BOTH LAI
+          and yield are low, and prefer a partitioning or SLA change when only one
+          of them is.
       KDIFTableK:
         enabled: true
         kind: table
@@ -695,7 +501,93 @@ targets:
           Extinction coefficient for diffuse visible light. Sets how much radiation
           a given LAI intercepts. An alternative to RUE when the biomass deficit is
           concentrated in low-LAI phases (early season, post-anthesis) rather than
-          being proportional across the whole season.
+          being proportional across the whole season. It changes biomass without
+          changing the leaf-area calculation directly, so it moves yield more than
+          LAI — the reverse of SLA.
+
+      # -- partitioning: where the assimilate goes -------------------------
+      LeavesPartitioningTableFraction:
+        enabled: true
+        kind: table
+        type: float
+        mode: relative
+        factor: [0.7, 1.35]
+        clip: [0.0, 1.0]
+        precision: 4
+        affects_lai: true
+        coupled_with: [StemsPartitioningTableFraction, StorageOrgansPartitioningTableFraction]
+        controls: [peak_lai, rise_rate, harvest_index]
+        meaning: >-
+          Fraction of above-ground dry matter allocated to leaves, by DVS. Changes
+          LAI through leaf *weight* rather than through SLA, and unlike SLA it also
+          changes the pool left for stems and the storage organ — so it moves the
+          canopy and the harvest index at once. Use it when SLA alone cannot
+          reconcile peak LAI with observed biomass. Leaves + stems + storage organs
+          must still sum to 1 at every shared DVS node.
+      StemsPartitioningTableFraction:
+        enabled: true
+        kind: table
+        type: float
+        mode: relative
+        factor: [0.7, 1.35]
+        clip: [0.0, 1.0]
+        precision: 4
+        affects_lai: true
+        coupled_with: [LeavesPartitioningTableFraction, StorageOrgansPartitioningTableFraction]
+        controls: [partitioning_balance]
+        meaning: >-
+          Fraction of above-ground dry matter to stems, by DVS. In this workflow it
+          is the counterweight: it is what keeps above-ground partitioning summing
+          to 1 when leaf or storage-organ allocation is changed. Assimilate moved
+          into the grain after anthesis comes from here.
+      StorageOrgansPartitioningTableFraction:
+        enabled: true
+        kind: table
+        type: float
+        mode: relative
+        factor: [0.7, 1.3]
+        clip: [0.0, 1.0]
+        precision: 4
+        affects_lai: true
+        coupled_with: [StemsPartitioningTableFraction, LeavesPartitioningTableFraction]
+        controls: [harvest_index]
+        meaning: >-
+          Fraction of above-ground dry matter routed to the storage organ (grain,
+          tuber, seed), by DVS. The harvest-index lever: use it when simulated
+          AGBiomass matches the observations but yield does not — i.e. when the
+          yield diagnostics attribute the error to HI rather than to biomass. Note
+          that in crops whose crop.xml has a hard 0->1 step at anthesis (winter
+          wheat, spring barley) the tables are pinned by the closure constraint and
+          the harvest index has to be reached through RUE or FRTDM instead.
+      FRTDM:
+        enabled: true
+        kind: scalar
+        type: float
+        # Absolute, not relative: the five crops start anywhere from 0.01
+        # (rapeseed) to 0.2 (spring barley), and relative bounds around 0.01 would
+        # pin rapeseed to a range far too narrow to test the mechanism at all.
+        mode: absolute
+        low: 0.0
+        high: 0.35
+        precision: 3
+        controls: [translocation, harvest_index]
+        meaning: >-
+          Fraction of pre-anthesis above-ground biomass available for
+          remobilisation to the storage organ. The one translocation parameter the
+          solution actually consumes — the input to the BiomassTranslocation
+          component, whose result is reported as Yield_translocated_t_ha. Raising
+          it moves assimilate laid down in leaves and stems before anthesis into
+          the grain, which raises the harvest index WITHOUT changing total
+          above-ground biomass and without touching the canopy. That makes it the
+          right lever when biomass is plausible, the harvest index is not, and the
+          partitioning tables are a step function that cannot be moved. Read the
+          `translocation` block of the yield diagnostics first: it scores
+          Yield_t_ha and Yield_translocated_t_ha against the same observed district
+          yields and says whether the remobilisation term is helping or
+          overshooting. Measured remobilisation in small-grain cereals is roughly
+          10-25% of pre-anthesis assimilate.
+
+      # -- nitrogen limitation on grain filling ----------------------------
       NMAXSO:
         enabled: true
         kind: scalar
@@ -765,7 +657,71 @@ targets:
           long post-anthesis uptake can keep supplying the grain. Must stay above
           DVSNT.
 
+      # ---------------------------------------------------------------------
+      # Disabled — kept as documentation rather than deleted.
+      #
+      # Both are declared under the `crop` resource in solution.sol.xml but are
+      # taken as an input by no simcomponent, so writing them changes nothing in
+      # the simulation. Any objective movement while calibrating them would be
+      # noise being read as signal.
+      # ---------------------------------------------------------------------
+      YieldAdjustRatio:
+        enabled: false
+        disabled_reason: >-
+          declared in solution.sol.xml but consumed by no simcomponent (verified by
+          grep for source="crop.YieldAdjustRatio") — changing it cannot change any
+          simulated value
+        kind: scalar
+        type: float
+        mode: absolute
+        low: 0.8
+        high: 1.2
+        precision: 3
+        controls: [yield_scale]
+        meaning: >-
+          Intended as a multiplicative correction on reported yield. Inert in this
+          solution. If it is ever wired up, treat it as the last resort: it changes
+          nothing inside the growth simulation, so it can only remove a uniform
+          offset, never a pattern.
+      FreshratioStorageOrgan:
+        enabled: false
+        disabled_reason: >-
+          declared in solution.sol.xml but consumed by no simcomponent — changing
+          it cannot change any simulated value; the per-crop `dm_fraction` in
+          config.yaml is what actually puts observed yield on a dry-matter basis
+        kind: scalar
+        type: float
+        mode: absolute
+        low: 0.75
+        high: 0.95
+        precision: 3
+        controls: [yield_scale, moisture_basis]
+        meaning: >-
+          Intended as the dry-matter fraction converting storage-organ weight to
+          the reported yield basis (~0.86 = 14% moisture for cereals). Inert in
+          this solution.
+
     constraints:
+      - id: sla_profile_smooth
+        type: table_smoothness
+        param: SLATableSLA
+        max_ratio: 1.9
+        note: >-
+          Adjacent SLA nodes may not differ by more than this factor. A saw-toothed
+          SLA profile produces a physically meaningless LAI trajectory that the
+          DVS-binned RMSE cannot see.
+      - id: sla_declines_to_maturity
+        type: table_endpoint_order
+        param: SLATableSLA
+        rule: last_le_max
+        tolerance: 0.0005
+        note: SLA at maturity must not exceed the profile maximum — old leaves are thicker.
+      - id: leaf_rdr_non_decreasing_with_temp
+        type: table_monotone
+        param: RDRLeavesTableRelativeRate
+        direction: non_decreasing
+        tolerance: 1.0e-6
+        note: Leaf death rate must not fall as mean temperature rises.
       - id: rue_declines_after_anthesis
         type: table_monotone_from
         param: RUETableRUE
@@ -796,7 +752,11 @@ targets:
           - LeavesPartitioningTable
           - StemsPartitioningTable
           - StorageOrgansPartitioningTable
-        tolerance: 0.01
+        tolerance: 0.005
+        note: >-
+          Above-ground allocation must sum to 1 at every DVS node where it already
+          did. Checked against the pre-change profile so the existing
+          differing-grid artifacts in some crops are not reported as new breakage.
       - id: n_thresholds_ordered
         type: ordering
         rule: DVSNT < DVSNLT
@@ -805,9 +765,14 @@ targets:
         type: max_changed
         limit: 3
         max_elements: 4
+        note: >-
+          At most 3 parameters (a table counts as one) and at most 4 individual
+          table elements per iteration. With two objectives being watched at once,
+          an iteration that moves more than this cannot be attributed to either.
       - id: bounded_step_size
         type: relative_step
         max_fraction: 0.5
+        note: No single value may move more than 50% of its previous value in one iteration.
 
 # ---------------------------------------------------------------------------
 # Agronomic reference ranges, per crop.
@@ -842,18 +807,6 @@ crop_reference:
     ag_biomass_t_ha: [14.0, 26.0]
 
 # ---------------------------------------------------------------------------
-# LAI regression guard used by `calibrate.py verify-lai`.
-# ---------------------------------------------------------------------------
-lai_regression:
-  # A yield iteration is allowed to worsen the LAI objective by at most this
-  # fraction of the LAI-calibrated best before it counts as destroying the LAI
-  # calibration.
-  max_relative_degradation: 0.10
-  # Locations used for the check — smaller than a full LAI iteration, it is a
-  # guard rail rather than a calibration.
-  n_locations: 100
-
-# ---------------------------------------------------------------------------
 # Local LLM agents (optimization/agents/, driven by optimization/agentic.py).
 #
 # Everything runs on this machine: the agent talks to a local Ollama server over
@@ -870,12 +823,27 @@ llm:
   provider: ollama # ollama | mock  (mock is for the test suite)
   host: http://localhost:11434
   # A calibration prompt carries the full parameter table, the diagnostics and
-  # the history, which is large; and a cold local model is slow.
-  num_ctx: 16384
+  # the history, which is large; and a cold local model is slow. The growth stage
+  # carries two sets of diagnostics, so it is the largest of the two.
+  num_ctx: 32768
+  # Guaranteed room for the answer, so the prompt cannot consume the whole budget.
+  num_predict: 2048
   request_timeout: 900
+
+  # Reasoning models (qwen3.x, deepseek-r1, …) return their chain of thought in a
+  # separate `thinking` field and will happily spend the entire generation budget
+  # on it, leaving `content` empty. Thinking buys nothing here: the reply schema
+  # already requires `analysis` and `reasoning`, and those land in the OUTPUT,
+  # where the ledger records them and the next iteration can read them back.
+  think: false
+
+  # How many recent iterations are shown in full. Older ones are compressed to one
+  # line each — enough to stop a parameter being re-proposed, without letting the
+  # prompt grow without bound as the ledger fills up.
+  history_iterations: 12
   # Malformed JSON or a proposal that violates a constraint is handed back to the
   # model with the exact error, this many times, before the iteration is skipped.
-  max_repair_attempts: 10
+  max_repair_attempts: 50
   # Recorded in the ledger with every proposal, so a decision can always be traced
   # to the model that made it.
   record_prompts: true
@@ -886,17 +854,15 @@ llm:
     # Low temperature throughout: a calibration decision should be reproducible,
     # and the diversity that helps creative writing shows up here as parameter
     # thrash.
-    lai:
-      model: qwen3.6:35b-a3b
-      temperature: 0.2
-    yield:
-      model: qwen3.6:35b-a3b
-      temperature: 0.2
     phenology:
       model: qwen3.6:35b-a3b
-      # Phenology has the cleanest attribution rules of the three (flowering ->
-      # TSUM1, duration -> TSUM2), so there is nothing to gain from sampling.
+      # Phenology has the cleanest attribution rules of the two stages
+      # (flowering -> TSUM1, duration -> TSUM2), so there is nothing to gain from
+      # sampling.
       temperature: 0.1
+    growth:
+      model: qwen3.6:35b-a3b
+      temperature: 0.2
     analyst:
       # Read-only: writes the narrative interpretation of a run, proposes nothing.
       model: qwen3.6:35b-a3b

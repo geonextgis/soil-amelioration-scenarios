@@ -2,11 +2,12 @@
 #
 # This file answers "how is a calibration run set up and executed" — repo root,
 # climate forcing, SLURM, which input tables get staged, which project table and
-# subset each target uses, and the per-crop facts (crop_name, dm_fraction).
+# subset each run uses, and the per-crop facts (crop_name, dm_fraction).
 #
 # It says nothing about *which parameters to change*. That is calibration.yaml,
 # which `extends:` this file so the cluster settings and the per-crop facts live
-# in exactly one place.
+# in exactly one place. The two files never declare the same thing twice: run
+# definitions are only here, parameter spaces only there.
 #
 # Nothing here is read by the scenario pipeline (simplace/<crop>/config.yaml);
 # calibration runs are fully isolated under simplace/<crop>/runs_optim/.
@@ -28,7 +29,7 @@ slurm:
   num_tasks_per_node: 8
   debug: false
 
-# Which input tables get staged into the calibration run dir under the canonical
+# Which input tables get staged into a calibration run dir under the canonical
 # names the solution reads (data/soil/soil.csv, data/management/location.csv,
 # data/management/fertilizer_<crop>.csv). `lai` falls back to `production` when a
 # crop has no *_LAI variants on disk.
@@ -43,51 +44,63 @@ input_profiles:
     fertilizer: data/management/fertilizer_{crop}_LAI.csv
 
 # ---------------------------------------------------------------------------
-# Targets — the RUN definition for each calibration objective: which project
-# table, which input profile, which output namespace, and the default subset.
+# Targets = the two calibration stages, each defined as one or more VIEWS.
 #
-# The parameter space, the constraints and the stopping rules for each target
-# live in calibration.yaml, which overrides `exp_name` / `project_csv` /
-# `inputs` / `subset` with its own values. What is here is the fallback and the
-# canonical description of the run itself.
+# A view is one complete model run: a project table, an input profile, an output
+# namespace and a subset. A stage with several views runs all of them from the
+# SAME crop.xml and scores each one, which is what makes joint calibration
+# possible: LAI and yield are observed on different point sets and cannot be
+# produced by a single run.
+#
+# Run dir:  simplace/<crop>/runs_optim/<run_subdir>/<view>/
+#
+# The parameter space, the objective weights, the constraints and the stopping
+# rules live in calibration.yaml.
 # ---------------------------------------------------------------------------
 targets:
+  # -- stage 1 -------------------------------------------------------------
   phenology:
-    exp_name: OPTIM_PHENOLOGY
-    project_csv: project/project_{crop}.csv
-    inputs: production
-    # Subset keeps an iteration cheap enough to reason about. null = everything.
-    subset:
-      n_locations: 300
-      year_start: 1995
-      year_end: 2022
+    run_subdir: calib_phenology
+    views:
+      phenology:
+        exp_name: CALIB_PHENOLOGY
+        project_csv: project/project_{crop}.csv
+        inputs: production
+        # Subset keeps an iteration cheap enough to reason about. null = everything.
+        subset:
+          n_locations: 400
+          year_start: 1995
+          year_end: 2022
 
-  lai:
-    exp_name: OPTIM_LAI
-    # Prebuilt LAI calibration table: one row per GLASS-LAI point, 2-year window
-    # matched to that point's observations. Its point set (and grid) differs from
-    # the baseline project table, hence the `lai` input profile.
-    project_csv: project/project_{crop}_LAI.csv
-    inputs: lai
-    subset:
-      n_locations: 400
-      year_start: null
-      year_end: null
-
-  yield:
-    exp_name: OPTIM_YIELD
-    project_csv: project/project_{crop}.csv
-    inputs: production
-    subset:
-      n_locations: 400
-      year_start: 1979
-      year_end: 2023
+  # -- stage 2: LAI and yield, calibrated together --------------------------
+  growth:
+    run_subdir: calib_growth
+    views:
+      lai:
+        exp_name: CALIB_GROWTH_LAI
+        # Prebuilt LAI calibration table: one row per GLASS-LAI point, 2-year
+        # window matched to that point's observations. Its point set (and weather
+        # grid) differs from the baseline table, hence the `lai` input profile.
+        project_csv: project/project_{crop}_LAI.csv
+        inputs: lai
+        subset:
+          n_locations: 400
+          year_start: null
+          year_end: null
+      yield:
+        exp_name: CALIB_GROWTH_YIELD
+        project_csv: project/project_{crop}.csv
+        inputs: production
+        subset:
+          n_locations: 400
+          year_start: 2000
+          year_end: 2023
 
 # ---------------------------------------------------------------------------
 # Crops. `crop_name` must match the <parameter id="CropName"> in data/crop/crop.xml.
 # `dm_fraction` puts *observed* yield on the model's dry-matter basis (1.0 = the
 # observations are already dry matter).
-# `targets:` here overrides the global target block for this crop only.
+# A crop may override any view with `targets: {<target>: {views: {<view>: ...}}}`.
 # ---------------------------------------------------------------------------
 crops:
   winter_wheat:

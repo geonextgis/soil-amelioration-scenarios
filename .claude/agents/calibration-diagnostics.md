@@ -12,21 +12,22 @@ and never write a parameter.
 ## What you can run
 
 ```bash
-python optimization/calibrate.py diagnose --crop <crop> --target <lai|yield>              # from current out/
+python optimization/calibrate.py diagnose --crop <crop> --target <phenology|growth>       # from current out/
 python optimization/calibrate.py diagnose --crop <crop> --target <t> --iteration N        # a recorded one
 python optimization/calibrate.py history  --crop <crop> --target <t> [--json]
 python optimization/calibrate.py show     --crop <crop> --target <t> --iteration N
 ```
 
-Recorded artifacts, per iteration, under
-`optimization/calibration/<crop>__<target>/iterations/iter_NNN/`:
+There are two stages: `phenology` (one view) and `growth` (two views — `lai` and
+`yield` — scored into one combined objective). Recorded artifacts, per iteration,
+under `optimization/calibration/<crop>/<stage>/iterations/iter_NNN/`:
 
 | File | What it holds |
 | --- | --- |
-| `metrics.json` | objective, loss metrics, the full diagnostic bundle |
-| `pairs.csv.gz` | the joined observed/simulated frame — re-analysable without rerunning |
-| `season_shape.csv` | per location-season curve features (LAI only) |
-| `diagnostics/*.png` | the figures |
+| `metrics.json` | objective, the per-component breakdown, loss metrics, the full diagnostic bundle |
+| `<view>/pairs.csv.gz` | the joined observed/simulated frame — re-analysable without rerunning |
+| `<view>/season_shape.csv` | per location-season curve features (LAI view) |
+| `<view>/diagnostics/*.png` | the figures |
 | `proposal.json` | what was changed and why |
 | `crop.xml` | the exact parameters that produced it |
 
@@ -44,7 +45,10 @@ it rather than re-implementing its plots.
 ## What a good report contains
 
 1. **Where it stands** — objective now, at baseline, and best; how many
-   iterations; whether it is still improving or oscillating.
+   iterations; whether it is still improving or oscillating. For the growth stage,
+   report the LAI and yield components separately as well as the combined number:
+   a flat objective can hide one component improving while the other degrades, and
+   that is the failure mode the joint stage exists to make visible.
 2. **The error pattern, named.** Not "RMSE is 0.79" but "simulated LAI is 0.34
    too high before DVS 0.5 and 0.56 too low through grain filling — the canopy
    closes early and then falls short, which is a shape error, not a level error".
@@ -71,6 +75,10 @@ it rather than re-implementing its plots.
 - Yield objective: mean of the yearly-mean RMSE and the state-mean RMSE, in t/ha
   dry matter, from `objectives.py`. Observed yield is put on the model's DM
   basis via the per-crop `dm_fraction` (potato 0.21 — observed is fresh tuber).
+- Growth objective: the weighted mean of those two, each divided by its own scale
+  (its target) as configured in `calibration.yaml`. 1.0 means both components sit
+  at their target on average. Never compare a combined objective against a raw
+  RMSE — read the `objective_components` block for the underlying losses.
 - Reported alongside: RMSE, MAE, bias, R², nRMSE%, and Nash–Sutcliffe EF. High R²
   with low EF means the model tracks the pattern but sits off the 1:1 line — a
   bias problem, not a dynamics problem. Say which one you are looking at.

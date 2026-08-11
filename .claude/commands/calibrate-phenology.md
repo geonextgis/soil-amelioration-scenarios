@@ -1,47 +1,48 @@
 ---
-description: Validate the already-optimized phenology for a crop (or recalibrate, if explicitly asked)
-argument-hint: <crop> [validate|recalibrate] [--locations N]
+description: Run the phenology calibration loop for a crop (stage 1, from scratch)
+argument-hint: <crop> [--iterations N] [--locations N]
 ---
 
-Run the phenology calibrator for **$ARGUMENTS** (default crop: `winter_wheat`,
-default mode: `validate`).
+Run the **phenology** calibration for **$ARGUMENTS** (default crop:
+`winter_wheat`). Delegate to the `phenology-calibrator` agent.
 
-Phenology is already optimized for all five crops here and both later stages
-freeze it, so **validation is the default and recalibration must be asked for in
-so many words**. If the arguments do not clearly say "recalibrate", validate.
+This is stage 1 and it runs from scratch. Its result is frozen for the joint
+LAI + yield stage, so it has to be finished before stage 2 starts.
 
-Delegate to the `phenology-calibrator` agent.
-
-## Validating
+## The loop
 
 1. `python optimization/calibrate.py status --crop <crop> --target phenology`
-2. Run it unchanged:
-   `python optimization/calibrate.py run --crop <crop> --target phenology --reason "validation"`
-3. Report flowering RMSE/bias, maturity RMSE/bias, the anthesis-to-maturity
-   duration RMSE/bias, the residual structure (year, season warmth, latitude) and
-   the attribution verdict.
-4. State whether the optimized set still reproduces the observations. A residual
-   under ~2 days is inside the observation network's resolution — say so rather
-   than implying there is something to fix.
+2. Iteration 0 with no `--params` — the baseline objective (mean of the flowering
+   and maturity RMSE, in days).
+3. Then, each iteration: read the diagnostics, name the mechanism, change one
+   thermal-time parameter, state the expected effect, rerun.
+4. Diagnose flowering from the **flowering** residual and `TSUM2` from the
+   **duration** residual, never from the raw maturity date.
+5. Stop when flowering and duration are both within a few days and no structure
+   is left in the residual. Residuals under ~2 days are inside the observation
+   network's resolution — say so rather than chasing them.
 
-Change nothing. Do not pass `--allow-recalibration`.
+Pre-flight with `--dry-run`; it is free. Use `--locations 40` while iterating and
+the configured subset for the run that counts.
 
-## Recalibrating (only if explicitly requested)
+## Reporting
 
-Same loop as `/calibrate-lai`: one hypothesis, one parameter, a stated expected
-effect, then compare. Add `--allow-recalibration` to every `run`. Diagnose
-flowering from the flowering residual and `TSUM2` from the **duration** residual,
-never from the raw maturity date.
+- best iteration and objective; flowering / maturity / duration RMSE and bias
+- the parameter path from baseline to best, with the reason for each step
+- any remaining structure (year, season warmth, latitude) and what it implicates
 
-The pre-change values are preserved automatically in
-`optimization/calibration/<crop>__phenology/optimized_baseline.json` and can be
-restored with `calibrate.py restore-optimized --crop <crop> --yes`.
+## Handing over
 
-## Either way
+Report these two commands and let the user run them:
 
-Never run `calibrate.py promote`. For phenology in particular, promoting would
-invalidate the LAI and yield calibrations built on the frozen values — if a
-recalibration succeeds, say plainly that both later stages must be redone.
+```bash
+python optimization/calibrate.py promote --crop <crop> --target phenology --yes
+python optimization/calibrate.py handoff --crop <crop>
+```
 
-Prefer `--locations 40` or so while iterating; the configured 150 is for the run
-that counts.
+Then `/calibrate-growth <crop>` is stage 2.
+
+## Never
+
+- Edit `crop.xml` by hand. Everything goes through `calibrate.py`.
+- Run `promote` or `handoff` yourself.

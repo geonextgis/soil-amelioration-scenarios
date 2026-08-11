@@ -3,9 +3,10 @@
 Crop-model (SIMPLACE / LINTUL5) simulation framework for evaluating soil
 amelioration scenarios across baseline, historical, and future climate in Germany.
 
-Five crops have already been **phenology-, LAI-, and yield-optimized**:
-winter wheat, winter rapeseed, spring barley, potato, maize.
-This next phase runs **large-scale scenario simulations** using those calibrated crops.
+Five crops: winter wheat, winter rapeseed, spring barley, potato, maize.
+They are calibrated in two stages — phenology first, then LAI and yield jointly
+(see *Calibration* below) — and this phase runs **large-scale scenario
+simulations** with the calibrated crops.
 
 > **Paths are portable — do not hard-code the repo location.** The repo root is
 > derived from the file that needs it: `orchestration/generate.py` and
@@ -124,37 +125,49 @@ rule (dynamic per-year for baseline; district-median for historical/future).
 
 ## Calibration
 
-Phenology is **already calibrated and promoted** into each crop's
-`data/crop/crop.xml` (`TSUM1`, `TSUM2`, `TEFFMX`, …). Treat those values as
-frozen: do not recalibrate them, and do not edit `crop.xml` by hand.
+**Two stages**, in this order:
+
+1. **`phenology`** — thermal time (`TSUM1`, `TSUM2`, `TEFFMX`, …), calibrated
+   from scratch on its own. Everything downstream is dated off DVS, so the
+   development clock is settled first and then frozen.
+2. **`growth`** — **LAI and yield calibrated jointly**, with the stage-1
+   phenology frozen. They are not separable: RUE, KDIF and the partitioning
+   tables move biomass and leaf area at the same time, so calibrating them in
+   sequence means each undoes the other. One iteration runs SIMPLACE **twice** —
+   the GLASS-LAI point set and the district yield point set — from one
+   `crop.xml`, and scores one combined objective (each component divided by its
+   own target, so 1.0 = both at target on average).
 
 **There is no optimizer.** No Optuna, no Bayesian search, no sampler. Every
 parameter change comes from an agent that reads the diagnostics, names a
-mechanism, and states what it expects to happen. Two agent runtimes drive the
-same machinery:
+mechanism, and states what it expects to happen — for the growth stage, on
+*both* components. Two agent runtimes drive the same machinery:
 
-- **Local (Ollama)** — `python optimization/agentic.py run --crop <crop> --target lai`.
+- **Local (Ollama)** — `python optimization/agentic.py run --crop <crop> --target growth`.
   Agents in `optimization/agents/` talk to a local model server; nothing leaves
   the machine. `agentic.py check` reports whether Ollama is reachable and the
   configured models are pulled.
-- **Claude Code** — `/calibrate-lai`, `/calibrate-yield`, `/calibrate-phenology`,
-  driven by the agents in `.claude/agents/`.
+- **Claude Code** — `/calibrate-phenology`, `/calibrate-growth`, driven by the
+  agents in `.claude/agents/`.
 
 Both go through `optimization/calibrate.py`, which is the only path to
 `crop.xml`. It validates against the constraints in `calibration.yaml`, verifies
-the phenology freeze by re-reading the written XML, runs SIMPLACE, scores with
-the losses in `optimization/objectives.py`, and appends to
-`optimization/calibration/<crop>__<target>/ledger.jsonl`.
+the freeze by re-reading the written XML, mirrors the file into every view, runs
+SIMPLACE, scores with `optimization/objectives.py` +
+`optimization/evaluation.py`, and appends to
+`optimization/calibration/<crop>/<stage>/ledger.jsonl`.
 
-Order: phenology (validate only) → LAI → `calibrate.py handoff --crop <crop>` →
-yield (with the LAI parameter set frozen and `calibrate.py verify-lai` as the
-regression guard). Nothing writes to `simplace/<crop>/data/crop/crop.xml` except
-`calibrate.py promote --yes`.
+```bash
+python optimization/calibrate.py run     --crop <crop> --target phenology   # iterate
+python optimization/calibrate.py promote --crop <crop> --target phenology --yes
+python optimization/calibrate.py handoff --crop <crop>                      # seeds stage 2
+python optimization/calibrate.py run     --crop <crop> --target growth      # iterate
+python optimization/calibrate.py promote --crop <crop> --target growth --yes
+```
 
-The phenology target is **protected**: it can be validated freely, but writing a
-parameter requires `--allow-recalibration`, and the pre-change values are
-preserved in `optimized_baseline.json` (restore with
-`calibrate.py restore-optimized`).
+Nothing writes to `simplace/<crop>/data/crop/crop.xml` except
+`calibrate.py promote --yes`; do not edit it by hand. `restore-baseline` puts a
+stage's starting parameters back if a calibration goes somewhere useless.
 
 Self-test, no cluster needed: `python optimization/test_calibrate.py`.
-See `optimization/README.md` for the full contract.
+See `optimization/README.md` for the full contract and the step-by-step runbook.

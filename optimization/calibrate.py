@@ -1,28 +1,36 @@
 #!/usr/bin/env python
-"""Agentic SIMPLACE calibration — the tool Claude drives, one iteration at a time.
+"""SIMPLACE calibration — the tool an agent drives, one iteration at a time.
 
-There is no sampler here. Every parameter change comes from a proposal Claude
+There is no sampler here. Every parameter change comes from a proposal someone
 writes, with a stated reason; this script validates it, runs the model, scores it
-with the *existing* loss function, produces the diagnostics needed to decide the
-next move, and appends an immutable record to the ledger.
+with the losses in ``objectives.py``, produces the diagnostics needed to decide
+the next move, and appends an immutable record to the ledger.
 
-    calibrate.py status    --crop winter_wheat --target lai
-    calibrate.py run       --crop winter_wheat --target lai \
-                           --params '{"SLATableSLA": {"3": 0.0118}}' \
-                           --reason "peak LAI 0.6 high in the anthesis bin"
-    calibrate.py diagnose  --crop winter_wheat --target lai
-    calibrate.py history   --crop winter_wheat --target lai
-    calibrate.py handoff   --crop winter_wheat
-    calibrate.py verify-lai --crop winter_wheat
-    calibrate.py promote   --crop winter_wheat --target lai --yes
+Two stages, in this order:
+
+    stage 1  --target phenology   thermal time, calibrated from scratch
+    stage 2  --target growth      LAI and yield, calibrated JOINTLY with the
+                                  stage-1 phenology frozen
+
+    calibrate.py status   --crop winter_wheat --target phenology
+    calibrate.py run      --crop winter_wheat --target phenology \
+                          --params '{"TSUM1": 1180}' --reason "flowering 4 d early"
+    calibrate.py promote  --crop winter_wheat --target phenology --yes
+    calibrate.py handoff  --crop winter_wheat
+    calibrate.py run      --crop winter_wheat --target growth
+    calibrate.py promote  --crop winter_wheat --target growth --yes
 
 Iteration 0 is the baseline: run it with no ``--params`` to record the objective
-of the phenology-optimized starting point, so every later iteration has a
-reference to beat.
+of the starting point, so every later iteration has a reference to beat.
+
+A ``growth`` iteration runs the model **twice** — once on the GLASS-LAI point set
+and once on the district yield point set — from one ``crop.xml``, and scores a
+single combined objective. That is what makes the interdependent LAI and yield
+parameters calibratable together instead of one undoing the other.
 
 Guarantees
 ----------
-* The optimized phenology parameters are snapshotted on first use and re-verified
+* The frozen parameters of a stage are snapshotted on first use and re-verified
   by re-reading the written XML after every change. A change that touches them
   aborts the iteration and rolls the file back.
 * A proposal that breaks a bound, a table shape rule or the partitioning closure
@@ -40,13 +48,13 @@ import sys
 import time
 from pathlib import Path
 
-import pandas as pd
-
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import calib_common as cc  # noqa: E402
 import calib_diagnostics as cd  # noqa: E402
 import common  # noqa: E402
-import objectives  # noqa: E402
+import evaluation  # noqa: E402
+
+TARGETS = ["phenology", "growth"]
 
 
 # ---------------------------------------------------------------------------
@@ -72,12 +80,11 @@ def _fmt(value, nd: int = 5) -> str:
 
 
 def _prepare(args, target: str | None = None) -> cc.CalibSpec:
-    """Load the spec and stage the isolated run dir (idempotent)."""
+    """Load the spec and stage the isolated run dir of every view (idempotent)."""
     spec = cc.load_spec(Path(args.config), args.crop, target or args.target,
                         device=getattr(args, "device", "cluster"),
                         n_locations=getattr(args, "locations", None))
-    info = cc.stage(spec, rebuild=getattr(args, "rebuild", False))
-    spec.stage_info = info
+    spec.stage_info = cc.stage(spec, rebuild=getattr(args, "rebuild", False))
     return spec
 
 
@@ -87,30 +94,16 @@ def _baseline_files(spec: cc.CalibSpec) -> None:
     if not baseline.exists():
         shutil.copyfile(spec.crop_xml, baseline)
     cc.ensure_frozen_snapshot(spec)
-    if spec.target_cfg.get("protected"):
-        cc.ensure_protected_baseline(spec)
 
 
-def _protection_gate(spec: cc.CalibSpec, changed: dict, allowed: bool) -> int | None:
-    """Refuse to write a protected target's parameters unless explicitly allowed.
-
-    The phenology set is already optimized for every crop here. Validating it
-    (running it unchanged and scoring it) is always fine; overwriting it is a
-    deliberate act that has to be asked for. Returns an exit code to stop with,
-    or None to continue.
-    """
-    if not spec.target_cfg.get("protected") or not changed or allowed:
-        return None
-    note = " ".join((spec.target_cfg.get("protected_note") or "").split())
-    print(f"\n  REFUSED — '{spec.target}' is a protected target and this proposal "
-          f"changes {len(changed)} parameter(s):")
-    for pid in sorted(changed):
-        print(f"    {pid}")
-    if note:
-        print(f"\n  {note}")
-    print(f"\n  To validate the optimized values instead, run with no --params.")
-    print(f"  To recalibrate anyway, add --allow-recalibration (recorded in the ledger).\n")
-    return 4
+def _scope(spec: cc.CalibSpec) -> dict:
+    """What was simulated, per view — recorded with every iteration."""
+    return {view: {"project_csv": str(spec.runs[view].project_csv),
+                   "rows": (spec.stage_info.get(view) or {}).get("rows"),
+                   "locations": (spec.stage_info.get(view) or {}).get("locations"),
+                   "subset": spec.runs[view].subset,
+                   "climate": spec.runs[view].mount_data}
+            for view in spec.views}
 
 
 # ---------------------------------------------------------------------------
@@ -129,12 +122,12 @@ def cmd_status(args) -> int:
 
     payload = {
         "crop": spec.crop, "crop_name": spec.crop_name, "target": spec.target,
-        "run_dir": str(spec.run.run_dir), "out_dir": str(spec.run.out_dir),
+        "views": spec.views,
+        "objective": spec.objective_name,
+        "objective_components": spec.components,
+        "scope": _scope(spec),
+        "run_dirs": {view: str(spec.runs[view].run_dir) for view in spec.views},
         "ledger_dir": str(spec.ledger_dir),
-        "objective": spec.target_cfg.get("objective"),
-        "project_rows": spec.stage_info.get("rows"),
-        "project_locations": spec.stage_info.get("locations"),
-        "subset": spec.run.subset,
         "frozen": {
             "parameters": spec.frozen,
             "digest": snapshot["digest"],
@@ -145,6 +138,7 @@ def cmd_status(args) -> int:
         "n_completed": stop["n_completed"],
         "best": None if not best else {
             "iteration": best["iteration"], "objective": best["objective"],
+            "components": best.get("objective_components"),
             "parameters_changed": sorted(best.get("parameters_changed", {})),
         },
         "stopping": stop,
@@ -164,12 +158,16 @@ def cmd_status(args) -> int:
         return 0
 
     print(f"\n{'=' * 78}\n  {spec.crop} · {spec.target} calibration\n{'=' * 78}")
-    print(f"  run dir            {spec.run.run_dir}")
     print(f"  ledger             {spec.ledger_dir}")
-    print(f"  objective          {spec.target_cfg.get('objective')}")
-    print(f"  project            {spec.stage_info['rows']:,} rows / "
-          f"{spec.stage_info['locations']:,} locations")
-    print(f"  frozen phenology   {'INTACT' if not drift else 'DRIFTED!'} "
+    print(f"  objective          {spec.objective_name}")
+    for view in spec.views:
+        info = spec.stage_info.get(view) or {}
+        weight = spec.components.get(view, {})
+        print(f"  view {view:<13s} {info.get('rows', 0):,} rows / "
+              f"{info.get('locations', 0):,} locations   "
+              f"weight {weight.get('weight')}, scale {weight.get('scale')}")
+        print(f"  {'':18s} {spec.runs[view].run_dir}")
+    print(f"  frozen             {'INTACT' if not drift else 'DRIFTED!'} "
           f"({len(spec.frozen)} parameters, digest {snapshot['digest'][:12]})")
     for line in drift:
         print(f"     ! {line}")
@@ -229,42 +227,6 @@ def cmd_status(args) -> int:
 # ---------------------------------------------------------------------------
 # run — one iteration
 # ---------------------------------------------------------------------------
-def _evaluate(spec: cc.CalibSpec, iter_dir: Path) -> tuple[float, dict, dict, list[str]]:
-    """Objective + metrics + diagnostics + figures for the outputs now in out/."""
-    process_result, loss_fn = cc.objective_for(spec.target)
-
-    if spec.target == "phenology":
-        pairs = process_result(spec.run)
-        objective, metrics = loss_fn(pairs)
-        points = cd.load_points(spec)
-        diagnostics = cd.phenology_diagnostics(pairs, points)
-        pairs.to_csv(iter_dir / "pairs.csv.gz", index=False, compression="gzip")
-        figures = cd.phenology_plots(pairs, iter_dir / "diagnostics",
-                                     f"{spec.crop} · phenology", points=points)
-    elif spec.target == "lai":
-        pairs = process_result(spec.run)
-        objective, metrics = loss_fn(pairs)
-        diagnostics, seasons = cd.lai_diagnostics(pairs, objectives.DVS_BINS)
-        pairs.to_csv(iter_dir / "pairs.csv.gz", index=False, compression="gzip")
-        if not seasons.empty:
-            seasons.to_csv(iter_dir / "season_shape.csv", index=False)
-        daily = cd.load_lai_daily(spec)
-        figures = cd.lai_plots(pairs, seasons, objectives.DVS_BINS, iter_dir / "diagnostics",
-                               f"{spec.crop} · LAI", sim_daily=daily)
-    elif spec.target == "yield":
-        pairs = process_result(spec.run)
-        objective, metrics = loss_fn(pairs)
-        frame = cd.yield_attribution_frame(spec)
-        reference = (spec.cfg.get("crop_reference") or {}).get(spec.crop)
-        diagnostics = cd.yield_diagnostics(frame, reference)
-        frame.to_csv(iter_dir / "pairs.csv.gz", index=False, compression="gzip")
-        figures = cd.yield_plots(frame, iter_dir / "diagnostics", f"{spec.crop} · yield")
-    else:
-        raise SystemExit(f"target {spec.target!r} has no agentic evaluation path")
-
-    return float(objective), metrics, diagnostics, figures
-
-
 def cmd_run(args) -> int:
     spec = _prepare(args)
     _baseline_files(spec)
@@ -272,7 +234,22 @@ def cmd_run(args) -> int:
 
     current = cc.current_values(spec.crop_xml, spec.crop_name, spec.space)
     proposed_raw = _load_json_arg(args.params)
-    proposal = cc.normalise_proposal(proposed_raw, current, spec.space)
+    try:
+        proposal = cc.normalise_proposal(proposed_raw, current, spec.space)
+    except SystemExit as exc:
+        # A proposal that cannot even be parsed is still a verdict a caller needs
+        # in machine-readable form. Dying with a stderr message here is what turns
+        # an agent's recoverable mistake — a mis-shaped table edit — into a crash
+        # of the whole calibration loop, because the pre-flight gets nothing it
+        # can hand back to the model.
+        if not args.dry_run:
+            raise
+        print(json.dumps({
+            "iteration": cc.next_iteration(spec), "valid": False, "would_change": {},
+            "violations": [{"constraint": "proposal_shape", "parameter": None,
+                            "message": " ".join(str(exc).split())}],
+        }, indent=2, default=str))
+        return 2
     changed = cc.changed_entries(proposal, current)
 
     iteration = cc.next_iteration(spec)
@@ -280,31 +257,20 @@ def cmd_run(args) -> int:
         print("  note: iteration 0 usually records the unchanged baseline. Proceeding with "
               "the proposed change; the ledger will have no reference objective.")
 
-    # --- protected target: writing has to be asked for ------------------------
-    # A dry run is inspection, not a write, so the gate reports rather than blocks;
-    # it is enforced below, before anything reaches the file.
-    allow_recal = bool(getattr(args, "allow_recalibration", False))
-    blocked_by_protection = bool(spec.protected and changed and not allow_recal)
-    if not args.dry_run:
-        gate = _protection_gate(spec, changed, allow_recal)
-        if gate is not None:
-            return gate
-
     # --- validate before anything is written ---------------------------------
     violations = cc.validate(proposal, current, spec.space, spec.meta, spec.constraints,
                              spec.frozen, spec.crop_xml, spec.crop_name)
 
     # A dry run answers "would this be accepted?" and writes nothing at all — not
     # even to rejected.jsonl, because a pre-flight check is not a proposal. This is
-    # what an agent calls before spending a SLURM run on a change that cannot pass.
+    # what an agent calls before spending cluster time on a change that cannot pass.
     if args.dry_run:
         print(json.dumps({
             "iteration": iteration, "valid": not violations,
             "would_change": changed,
             "violations": [v.as_dict() for v in violations],
-            "blocked_by_protection": blocked_by_protection,
         }, indent=2, default=str))
-        return 0 if not (violations or blocked_by_protection) else 2
+        return 0 if not violations else 2
 
     if violations:
         record = {"timestamp": cc.utcnow(), "crop": spec.crop, "target": spec.target,
@@ -333,12 +299,16 @@ def cmd_run(args) -> int:
     drift = cc.verify_frozen(spec.crop_xml, snapshot)
     if drift:
         shutil.copyfile(previous_xml, spec.crop_xml)
-        print("\n  ABORTED — the write changed frozen phenology parameters:")
+        cc.sync_crop_xml(spec)
+        print("\n  ABORTED — the write changed frozen parameters:")
         for line in drift:
             print(f"    {line}")
         print("  crop.xml was rolled back. Nothing was run.\n")
         return 3
 
+    # Every view must simulate the same parameter set, or the components of the
+    # objective would describe different crops.
+    cc.sync_crop_xml(spec)
     shutil.copyfile(spec.crop_xml, iter_dir / "crop.xml")
     (iter_dir / "proposal.json").write_text(json.dumps({
         "iteration": iteration, "proposal": proposed_raw,
@@ -348,9 +318,10 @@ def cmd_run(args) -> int:
     }, indent=2, default=str) + "\n")
 
     print(f"\n[{spec.crop} · {spec.target}] iteration {iteration}")
-    print(f"  run dir   {spec.run.run_dir}")
-    print(f"  project   {spec.stage_info['rows']:,} rows / "
-          f"{spec.stage_info['locations']:,} locations")
+    for view in spec.views:
+        info = spec.stage_info.get(view) or {}
+        print(f"  view {view:<10s} {info.get('rows', 0):,} rows / "
+              f"{info.get('locations', 0):,} locations   {spec.runs[view].run_dir}")
     if changed:
         print("  changing:")
         for pid, change in changed.items():
@@ -368,16 +339,22 @@ def cmd_run(args) -> int:
     started = time.time()
     status, error = "completed", None
     objective = metrics = diagnostics = figures = None
+    result = None
     try:
         if args.skip_run:
             print("\n  --skip-run: scoring the outputs already in out/, no simulation")
         else:
-            print(f"\n  running SIMPLACE ({spec.run.device}) ...")
-            common.run_simplace(spec.run, iteration, log_path=iter_dir / "simplace.log")
-        objective, metrics, diagnostics, figures = _evaluate(spec, iter_dir)
+            for view in spec.views:
+                print(f"\n  running SIMPLACE · view {view} ({spec.runs[view].device}) ...")
+                common.run_simplace(spec.runs[view], iteration,
+                                    log_path=iter_dir / f"simplace_{view}.log")
+        result = evaluation.evaluate(spec, iter_dir)
+        objective, metrics = result.objective, result.metrics
+        diagnostics, figures = result.diagnostics, result.figures
     except Exception as exc:  # noqa: BLE001 — any failure must roll back and be recorded
         status, error = "failed", f"{type(exc).__name__}: {exc}"
         shutil.copyfile(previous_xml, spec.crop_xml)
+        cc.sync_crop_xml(spec)
         print(f"\n  ITERATION FAILED: {error}")
         print("  crop.xml rolled back to the last good state.")
 
@@ -402,22 +379,17 @@ def cmd_run(args) -> int:
         "crop": spec.crop,
         "crop_name": spec.crop_name,
         "target": spec.target,
+        "views": spec.views,
         "status": status,
         "error": error,
-        "scope": {
-            "project_csv": str(spec.run.project_csv),
-            "rows": spec.stage_info.get("rows"),
-            "locations": spec.stage_info.get("locations"),
-            "subset": spec.run.subset,
-            "climate": spec.run.mount_data,
-            "years": (diagnostics or {}).get("years"),
-        },
+        "scope": _scope(spec),
         "parameters": {k: v for k, v in {**current, **proposal}.items()},
         "parameters_changed": {k: v["to"] for k, v in changed.items()},
         "previous_values": {k: v["from"] for k, v in changed.items()},
         "changed_detail": changed,
         "objective": objective,
-        "objective_name": spec.target_cfg.get("objective"),
+        "objective_name": spec.objective_name,
+        "objective_components": None if result is None else result.breakdown,
         "metrics": metrics,
         "diagnostics": diagnostics,
         "reason": args.reason,
@@ -432,12 +404,6 @@ def cmd_run(args) -> int:
                           else round(objective - previous_best["objective"], 6)),
         "frozen_digest": snapshot["digest"],
         "frozen_intact": not cc.verify_frozen(spec.crop_xml, snapshot),
-        # For a protected target: how far the current values have moved from the
-        # already-optimized set that was preserved on first use. Empty means the
-        # iteration was a pure validation run.
-        "protected": spec.protected,
-        "protected_drift": cc.protected_drift(spec) if spec.protected else [],
-        "recalibration_allowed": allow_recal,
         "constraint_violations": [v.as_dict() for v in violations],
         "forced": bool(args.force),
         "figures": figures or [],
@@ -446,7 +412,9 @@ def cmd_run(args) -> int:
     }
     cc.append_ledger(spec, record)
     (iter_dir / "metrics.json").write_text(json.dumps({
-        "objective": objective, "metrics": metrics, "diagnostics": diagnostics,
+        "objective": objective,
+        "objective_components": None if result is None else result.breakdown,
+        "metrics": metrics, "diagnostics": diagnostics,
     }, indent=2, default=str) + "\n")
 
     if status == "completed":
@@ -463,7 +431,7 @@ def cmd_run(args) -> int:
         "best_iteration": None if not best_now else best_now["iteration"],
         "best_objective": None if not best_now else best_now["objective"],
         "frozen_digest": snapshot["digest"],
-        "run_dir": str(spec.run.run_dir),
+        "run_dirs": {view: str(spec.runs[view].run_dir) for view in spec.views},
     })
     state.setdefault("created", cc.utcnow())
     cc.write_state(spec, state)
@@ -475,15 +443,75 @@ def cmd_run(args) -> int:
     return 0 if status == "completed" else 1
 
 
+# ---------------------------------------------------------------------------
+# reporting
+# ---------------------------------------------------------------------------
+def _report_phenology(diagnostics: dict) -> None:
+    for name in ("flowering", "maturity", "duration"):
+        m = diagnostics.get(name) or {}
+        if m.get("n"):
+            print(f"    {name:<12s} RMSE {m['RMSE']:>6.2f} d   bias {m['bias']:>+6.2f} d   "
+                  f"R2 {m.get('R2') if m.get('R2') is None else round(m['R2'], 3)}   "
+                  f"n={m['n']:,}")
+    structure = diagnostics.get("residual_structure") or {}
+    if structure:
+        print(f"    warmth slope  {structure.get('vs_season_warmth_slope')} d/d   "
+              f"latitude slope {structure.get('vs_latitude_slope')} d/deg")
+    if diagnostics.get("attribution"):
+        print(f"    attribution   {diagnostics['attribution']['verdict']}")
+
+
+def _report_lai(diagnostics: dict) -> None:
+    if "by_dvs_bin" in diagnostics:
+        print(f"    {'DVS bin':<26s} {'n':>6s} {'obs':>8s} {'sim':>8s} {'bias':>8s} {'rmse':>8s}")
+        for row in diagnostics["by_dvs_bin"]:
+            print(f"    {row['dvs_bin']:<26s} {row['n']:>6} {row['obs_mean']:>8.3f} "
+                  f"{row['sim_mean']:>8.3f} {row['bias']:>+8.3f} {row['rmse']:>8.3f}")
+    shape = diagnostics.get("curve_shape", {})
+    for name in ("peak_lai", "peak_timing", "plateau_duration", "rise_rate", "decline_rate",
+                 "early_canopy"):
+        item = shape.get(name)
+        if isinstance(item, dict) and item.get("n"):
+            print(f"    {name:<26s} obs {item['obs_median']:>8.4g}   sim {item['sim_median']:>8.4g}"
+                  f"   diff {item['median_diff']:>+8.4g}  [{item.get('unit', '')}]")
+
+
+def _report_yield(diagnostics: dict) -> None:
+    a = diagnostics.get("attribution")
+    if a:
+        print(f"    harvest index sim {a['hi_simulated_median']:.3f}   "
+              f"required {a['hi_required_to_match_obs']:.3f}   ref {a['reference_harvest_index']}")
+        print(f"    AG biomass    sim {a['ag_biomass_simulated_median']:.2f}   "
+              f"required {a['ag_biomass_required_to_match_obs']:.2f}   "
+              f"ref {a['reference_ag_biomass_t_ha']}")
+        print(f"    attribution   {a['verdict']}")
+    t = diagnostics.get("translocation")
+    if t:
+        print(f"    translocation Yield_t_ha RMSE {t['yield_plain']['RMSE']:.3f} t/ha   "
+              f"translocated RMSE {t['yield_translocated']['RMSE']:.3f} t/ha   "
+              f"FRTDM {t['median_translocation_contribution_t_ha']:+.3f} t/ha")
+        print(f"    FRTDM verdict {t['verdict']}")
+
+
+VIEW_REPORTS = {"phenology": _report_phenology, "lai": _report_lai, "yield": _report_yield}
+
+
 def _report(spec: cc.CalibSpec, record: dict) -> None:
     """Human summary plus the one-line JSON the calling agent reads back."""
     print("\n" + "=" * 78)
     print(f"ITERATION {record['iteration']}  {spec.crop} · {spec.target}  [{record['status']}]")
     print("=" * 78)
     for key, value in (record.get("metrics") or {}).items():
-        print(f"  {key:<34s} {value}")
+        print(f"  {key:<40s} {value}")
+
+    components = record.get("objective_components") or {}
+    if components:
+        print()
+        for view, c in components.items():
+            print(f"  {view + ' component':<40s} {c['loss']:.4f} / scale {c['scale']} "
+                  f"= {c['scaled']:.3f}  (weight {c['weight']})")
     if record["objective"] is not None:
-        print(f"  {'OBJECTIVE':<34s} {record['objective']:.4f}")
+        print(f"  {'OBJECTIVE':<40s} {record['objective']:.4f}")
         if record["previous_best"]:
             if record["improved"]:
                 arrow = "IMPROVED"
@@ -491,70 +519,29 @@ def _report(spec: cc.CalibSpec, record: dict) -> None:
                 arrow = "new best, but below the min_improvement threshold"
             else:
                 arrow = "no improvement"
-            print(f"  {'previous best':<34s} {record['previous_best']['objective']:.4f} "
+            print(f"  {'previous best':<40s} {record['previous_best']['objective']:.4f} "
                   f"(iter {record['previous_best']['iteration']})  -> {arrow} "
                   f"({record['delta_vs_best']:+.4f})")
-    print(f"  {'frozen phenology intact':<34s} {record['frozen_intact']}")
-    print(f"  {'elapsed':<34s} {record['elapsed_seconds']}s")
-    print(f"  {'iteration dir':<34s} {record['iteration_dir']}")
+    print(f"  {'frozen parameters intact':<40s} {record['frozen_intact']}")
+    print(f"  {'elapsed':<40s} {record['elapsed_seconds']}s")
+    print(f"  {'iteration dir':<40s} {record['iteration_dir']}")
 
     diagnostics = record.get("diagnostics") or {}
-    if spec.target == "lai" and "by_dvs_bin" in diagnostics:
-        print(f"\n  {'DVS bin':<26s} {'n':>6s} {'obs':>8s} {'sim':>8s} {'bias':>8s} {'rmse':>8s}")
-        for row in diagnostics["by_dvs_bin"]:
-            print(f"  {row['dvs_bin']:<26s} {row['n']:>6} {row['obs_mean']:>8.3f} "
-                  f"{row['sim_mean']:>8.3f} {row['bias']:>+8.3f} {row['rmse']:>8.3f}")
-        shape = diagnostics.get("curve_shape", {})
-        for name in ("peak_lai", "peak_timing", "plateau_duration", "rise_rate", "decline_rate",
-                     "early_canopy"):
-            item = shape.get(name)
-            if isinstance(item, dict) and item.get("n"):
-                print(f"  {name:<26s} obs {item['obs_median']:>8.4g}   sim {item['sim_median']:>8.4g}"
-                      f"   diff {item['median_diff']:>+8.4g}  [{item.get('unit', '')}]")
-    if spec.target == "phenology":
-        for name in ("flowering", "maturity", "duration"):
-            m = diagnostics.get(name) or {}
-            if m.get("n"):
-                print(f"\n  {name:<14s} RMSE {m['RMSE']:>6.2f} d   bias {m['bias']:>+6.2f} d   "
-                      f"R2 {m.get('R2') if m.get('R2') is None else round(m['R2'], 3)}   "
-                      f"n={m['n']:,}")
-        structure = diagnostics.get("residual_structure") or {}
-        if structure:
-            print(f"\n  warmth slope    {structure.get('vs_season_warmth_slope')} d/d"
-                  f"   latitude slope {structure.get('vs_latitude_slope')} d/deg")
-        if diagnostics.get("attribution"):
-            print(f"  attribution     {diagnostics['attribution']['verdict']}")
-        if record.get("protected_drift"):
-            print(f"\n  ! this run has moved {len(record['protected_drift'])} parameter(s) "
-                  f"away from the preserved optimized set:")
-            for line in record["protected_drift"]:
-                print(f"      {line}")
-        elif record.get("protected"):
-            print(f"  optimized set   unchanged (validation run)")
-    if spec.target == "yield" and "attribution" in diagnostics:
-        a = diagnostics["attribution"]
-        print(f"\n  harvest index   sim {a['hi_simulated_median']:.3f}   "
-              f"required {a['hi_required_to_match_obs']:.3f}   ref {a['reference_harvest_index']}")
-        print(f"  AG biomass      sim {a['ag_biomass_simulated_median']:.2f}   "
-              f"required {a['ag_biomass_required_to_match_obs']:.2f}   "
-              f"ref {a['reference_ag_biomass_t_ha']}")
-        print(f"  attribution     {a['verdict']}")
-    if spec.target == "yield" and diagnostics.get("translocation"):
-        t = diagnostics["translocation"]
-        print(f"\n  translocation   Yield_t_ha              RMSE {t['yield_plain']['RMSE']:.3f} "
-              f"t/ha  mean {t['mean_plain_t_ha']:.2f}")
-        print(f"                  Yield_translocated_t_ha RMSE "
-              f"{t['yield_translocated']['RMSE']:.3f} t/ha  mean {t['mean_translocated_t_ha']:.2f}")
-        print(f"                  FRTDM contribution      "
-              f"{t['median_translocation_contribution_t_ha']:+.3f} t/ha (median)")
-        print(f"  FRTDM verdict   {t['verdict']}")
+    for view in spec.views:
+        block = diagnostics.get(view) or {}
+        report = VIEW_REPORTS.get(view)
+        if block and report:
+            print(f"\n  --- {view} ---")
+            report(block)
 
     stop = cc.stop_check(spec)
     print(f"\n  stopping: {'STOP — ' if stop['stop'] else 'continue — '}{stop['reason']}")
     print("=" * 78)
     print("JSON " + json.dumps({
         "iteration": record["iteration"], "status": record["status"],
-        "objective": record["objective"], "improved": record["improved"],
+        "objective": record["objective"],
+        "objective_components": {v: c["loss"] for v, c in (components or {}).items()},
+        "improved": record["improved"],
         "delta_vs_best": record["delta_vs_best"],
         "parameters_changed": record["parameters_changed"],
         "frozen_intact": record["frozen_intact"],
@@ -575,16 +562,15 @@ def cmd_diagnose(args) -> int:
         if record is None:
             raise SystemExit(f"no iteration {args.iteration} in the ledger")
         print(json.dumps({"iteration": record["iteration"], "objective": record["objective"],
+                          "objective_components": record.get("objective_components"),
                           "metrics": record["metrics"], "diagnostics": record["diagnostics"],
                           "figures": record["figures"]}, indent=2, default=str))
         return 0
 
-    iter_dir = spec.ledger_dir / "adhoc"
-    iter_dir.mkdir(parents=True, exist_ok=True)
-    objective, metrics, diagnostics, figures = _evaluate(spec, iter_dir)
-    print(json.dumps({"objective": objective, "metrics": metrics,
-                      "diagnostics": diagnostics, "figures": figures},
-                     indent=2, default=str))
+    result = evaluation.evaluate(spec, spec.ledger_dir / "adhoc")
+    print(json.dumps({"objective": result.objective, "objective_components": result.breakdown,
+                      "metrics": result.metrics, "diagnostics": result.diagnostics,
+                      "figures": result.figures}, indent=2, default=str))
     return 0
 
 
@@ -610,6 +596,8 @@ def cmd_history(args) -> int:
     best = cc.best_record(spec)
     if best:
         print(f"\n  best: iteration {best['iteration']}  objective {best['objective']:.4f}")
+        for view, c in (best.get("objective_components") or {}).items():
+            print(f"        {view:<10s} loss {c['loss']}")
         print(f"  crop.xml: {spec.ledger_dir / 'best_crop.xml'}")
     print()
     return 0
@@ -625,133 +613,82 @@ def cmd_show(args) -> int:
 
 
 # ---------------------------------------------------------------------------
-# handoff / verify-lai / promote
+# handoff / promote / restore-baseline
 # ---------------------------------------------------------------------------
 def cmd_handoff(args) -> int:
-    """Seed yield calibration from the LAI-calibrated crop.xml.
+    """Seed the growth stage from the phenology-calibrated crop.xml.
 
-    This is the LAI -> yield edge of the workflow. Without it, yield calibration
-    would start from the pre-LAI parameters and the LAI work would be lost.
+    This is the stage 1 -> stage 2 edge. Without it, the joint LAI+yield stage
+    would start from the pre-calibration thermal time and every canopy and yield
+    parameter would be tuned against the wrong development clock.
     """
-    lai = cc.load_spec(Path(args.config), args.crop, "lai")
-    best_lai = lai.ledger_dir / "best_crop.xml"
-    if not best_lai.exists():
+    phen = cc.load_spec(Path(args.config), args.crop, "phenology")
+    best_xml = phen.ledger_dir / "best_crop.xml"
+    if not best_xml.exists():
         raise SystemExit(
-            f"no calibrated LAI crop.xml at {best_lai}\n"
-            f"  run the LAI calibration first: calibrate.py status --crop {args.crop} --target lai")
+            f"no calibrated phenology crop.xml at {best_xml}\n"
+            f"  Run stage 1 first: calibrate.py status --crop {args.crop} --target phenology")
 
-    best_record = cc.best_record(lai)
-    yld = _prepare(args, target="yield")
+    best_record = cc.best_record(phen)
+    growth = _prepare(args, target="growth")
 
-    if (yld.ledger_dir / "ledger.jsonl").exists() and not args.force:
+    if growth.ledger_path.exists() and not args.force:
         raise SystemExit(
-            f"yield calibration for {args.crop} already has a ledger at {yld.ledger_path}.\n"
+            f"the growth calibration for {args.crop} already has a ledger at "
+            f"{growth.ledger_path}.\n"
             f"  Handing off now would change the starting point mid-study. Pass --force if "
             f"that is what you intend (the previous ledger is kept, not deleted).")
 
-    shutil.copyfile(best_lai, yld.crop_xml)
-    cc.refresh_space(yld)
-    # Re-anchor the freeze snapshot on the LAI-calibrated file: for the yield
-    # target the frozen set includes the LAI parameters, whose values are the ones
-    # that were just handed over.
-    snapshot = cc.snapshot_frozen(yld.crop_xml, yld.crop_name, yld.frozen)
-    yld.frozen_path.write_text(json.dumps(snapshot, indent=2) + "\n")
-    shutil.copyfile(yld.crop_xml, yld.ledger_dir / "baseline_crop.xml")
-    shutil.copyfile(yld.crop_xml, yld.ledger_dir / "current_crop.xml")
+    shutil.copyfile(best_xml, growth.crop_xml)
+    cc.sync_crop_xml(growth)
+    cc.refresh_space(growth)
+    # Re-anchor the freeze snapshot on the phenology-calibrated file: the frozen
+    # set for this stage is exactly what was just handed over.
+    snapshot = cc.snapshot_frozen(growth.crop_xml, growth.crop_name, growth.frozen)
+    growth.frozen_path.write_text(json.dumps(snapshot, indent=2) + "\n")
+    shutil.copyfile(growth.crop_xml, growth.ledger_dir / "baseline_crop.xml")
+    shutil.copyfile(growth.crop_xml, growth.ledger_dir / "current_crop.xml")
 
     provenance = {
         "handoff_at": cc.utcnow(),
-        "from": {"target": "lai", "crop_xml": str(best_lai),
+        "from": {"target": "phenology", "crop_xml": str(best_xml),
                  "iteration": None if not best_record else best_record["iteration"],
                  "objective": None if not best_record else best_record["objective"]},
         "frozen_digest": snapshot["digest"],
-        "frozen_parameters": yld.frozen,
+        "frozen_parameters": growth.frozen,
     }
-    (yld.ledger_dir / "provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
-    state = cc.read_state(yld)
-    state.update({"crop": args.crop, "target": "yield", "created": cc.utcnow(),
+    (growth.ledger_dir / "provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
+    state = cc.read_state(growth)
+    state.update({"crop": args.crop, "target": "growth", "created": cc.utcnow(),
                   "handoff": provenance})
-    cc.write_state(yld, state)
+    cc.write_state(growth, state)
 
-    print(f"\n  yield calibration seeded from the LAI-calibrated crop.xml")
-    print(f"    source     {best_lai}")
+    print(f"\n  growth calibration seeded from the phenology-calibrated crop.xml")
+    print(f"    source     {best_xml}")
     if best_record:
-        print(f"    LAI best   iteration {best_record['iteration']}  "
-              f"objective {best_record['objective']:.4f}")
-    print(f"    target     {yld.crop_xml}")
-    print(f"    frozen     {len(yld.frozen)} parameters (phenology + the LAI set)")
-    print(f"\n  Next: calibrate.py run --crop {args.crop} --target yield   "
+        print(f"    phenology  iteration {best_record['iteration']}  "
+              f"objective {best_record['objective']:.4f} (RMSE days)")
+    print(f"    target     {growth.crop_xml}")
+    for view in growth.views[1:]:
+        print(f"               {growth.runs[view].crop_xml}  (mirror)")
+    print(f"    frozen     {len(growth.frozen)} parameters (phenology + the response grids)")
+
+    # Promoting stage 1 is what makes `promote --target growth` possible later:
+    # promote refuses when the candidate differs from production in a frozen
+    # parameter, and after a phenology calibration it always does.
+    production = growth.run.crop_dir / "data" / "crop" / "crop.xml"
+    if cc.verify_frozen(production, snapshot):
+        print(f"\n  NOTE: the production crop.xml does not yet carry the calibrated "
+              f"phenology.\n  Promote stage 1 before promoting stage 2:\n"
+              f"    python optimization/calibrate.py promote --crop {args.crop} "
+              f"--target phenology --yes")
+    print(f"\n  Next: calibrate.py run --crop {args.crop} --target growth   "
           f"(iteration 0 = baseline)\n")
     return 0
 
 
-def cmd_verify_lai(args) -> int:
-    """Check that the yield-calibrated parameters have not undone the LAI calibration.
-
-    Several yield parameters (RUE, KDIF, partitioning) legitimately move LAI. This
-    stages the *LAI* target with the current yield crop.xml, runs it, and compares
-    the LAI objective against the LAI calibration's best.
-    """
-    yld = cc.load_spec(Path(args.config), args.crop, "yield")
-    if not yld.crop_xml.exists():
-        raise SystemExit(f"no yield calibration crop.xml at {yld.crop_xml}")
-
-    lai_cfg = cc.load_calib_config(Path(args.config)).get("lai_regression", {})
-    args.locations = args.locations or lai_cfg.get("n_locations")
-    lai = _prepare(args, target="lai")
-
-    reference = cc.best_record(lai)
-    if reference is None:
-        print("  note: the LAI calibration has no completed iterations; reporting the "
-              "current LAI objective without a comparison.")
-
-    saved = lai.ledger_dir / "pre_verify_crop.xml"
-    shutil.copyfile(lai.crop_xml, saved)
-    shutil.copyfile(yld.crop_xml, lai.crop_xml)
-
-    out_dir = lai.ledger_dir / "lai_regression"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        if not args.skip_run:
-            print(f"\n  running the LAI target with the yield-calibrated crop.xml ...")
-            common.run_simplace(lai.run, 9000, log_path=out_dir / "simplace.log")
-        objective, metrics, diagnostics, figures = _evaluate(lai, out_dir)
-    finally:
-        shutil.copyfile(saved, lai.crop_xml)
-        saved.unlink(missing_ok=True)
-
-    max_degradation = float(lai_cfg.get("max_relative_degradation", 0.10))
-    verdict = {"lai_objective_now": objective,
-               "lai_objective_calibrated": None if not reference else reference["objective"],
-               "max_relative_degradation": max_degradation}
-    if reference:
-        rel = (objective - reference["objective"]) / max(reference["objective"], 1e-9)
-        verdict["relative_degradation"] = round(rel, 4)
-        verdict["pass"] = bool(rel <= max_degradation)
-    record = {"timestamp": cc.utcnow(), "crop": args.crop, "source": "yield",
-              "yield_iteration": cc.next_iteration(yld) - 1,
-              "verdict": verdict, "metrics": metrics, "figures": figures}
-    with open(yld.ledger_dir / "lai_regression.jsonl", "a") as fh:
-        fh.write(json.dumps(record, default=str) + "\n")
-
-    print("\n" + "=" * 78)
-    print(f"  LAI REGRESSION CHECK  {args.crop}")
-    print("=" * 78)
-    print(f"  LAI objective with the yield parameters   {objective:.4f}")
-    if reference:
-        print(f"  LAI objective after LAI calibration       {reference['objective']:.4f} "
-              f"(iteration {reference['iteration']})")
-        print(f"  relative change                           {verdict['relative_degradation']:+.1%} "
-              f"(allowed {max_degradation:+.0%})")
-        print(f"  verdict                                   "
-              f"{'PASS' if verdict['pass'] else 'FAIL — the yield changes degraded LAI'}")
-    print("=" * 78)
-    print("JSON " + json.dumps(verdict, default=str))
-    return 0 if verdict.get("pass", True) else 1
-
-
 def cmd_promote(args) -> int:
-    """Copy a calibration's best crop.xml into the production crop inputs."""
+    """Copy a stage's best crop.xml into the production crop inputs."""
     spec = cc.load_spec(Path(args.config), args.crop, args.target)
     best_xml = spec.ledger_dir / "best_crop.xml"
     if not best_xml.exists():
@@ -765,6 +702,11 @@ def cmd_promote(args) -> int:
               "parameters:")
         for line in drift:
             print(f"    {line}")
+        if spec.target == "growth":
+            print(f"\n  This is what it looks like when stage 1 was calibrated but never "
+                  f"promoted.\n  Promote it first:\n"
+                  f"    python optimization/calibrate.py promote --crop {spec.crop} "
+                  f"--target phenology --yes")
         return 3
 
     best = cc.best_record(spec)
@@ -777,7 +719,9 @@ def cmd_promote(args) -> int:
     print(f"    to     {production}")
     if best:
         print(f"    best   iteration {best['iteration']}  objective {best['objective']:.4f}")
-    print(f"    frozen phenology unchanged: yes ({len(spec.frozen)} parameters)")
+        for view, c in (best.get("objective_components") or {}).items():
+            print(f"           {view:<10s} loss {c['loss']}")
+    print(f"    frozen parameters unchanged: yes ({len(spec.frozen)} parameters)")
     print("    parameter changes vs production:")
     for pid, change in changed.items():
         print(f"      {pid}  {_fmt(change['from'])} -> {_fmt(change['to'])}")
@@ -797,46 +741,42 @@ def cmd_promote(args) -> int:
     return 0
 
 
-def cmd_restore_optimized(args) -> int:
-    """Put a protected target's preserved optimized values back into the run dir.
+def cmd_restore_baseline(args) -> int:
+    """Put the stage's starting crop.xml back into the run dirs.
 
-    The escape hatch for a recalibration that went wrong: ``optimized_baseline.json``
-    holds the values as they stood before the first agentic iteration, so the
-    original phenology can always be recovered from the ledger alone.
+    The escape hatch for a calibration that went somewhere useless:
+    ``baseline_crop.xml`` is the file as it stood before iteration 0, so the
+    starting point is always recoverable from the ledger alone. The ledger itself
+    is untouched — the iterations that moved the parameters stay on record.
     """
     spec = _prepare(args)
-    if not spec.protected:
-        raise SystemExit(f"target {spec.target!r} is not protected; nothing is preserved for it")
-    if not spec.protected_path.exists():
+    baseline = spec.ledger_dir / "baseline_crop.xml"
+    if not baseline.exists():
         raise SystemExit(
-            f"no preserved values at {spec.protected_path}\n"
-            f"  They are written on the first run of this target; if it has never run, "
-            f"the production crop.xml is still the optimized set.")
+            f"no baseline at {baseline}\n"
+            f"  It is written on the first run of this stage; if it has never run, the "
+            f"production crop.xml is still the starting point.")
 
-    preserved = json.loads(spec.protected_path.read_text())
-    drift = cc.protected_drift(spec)
+    changed = cc.changed_entries(
+        cc.current_values(baseline, spec.crop_name, spec.space),
+        cc.current_values(spec.crop_xml, spec.crop_name, spec.space))
 
     print(f"\n  restore {spec.crop} · {spec.target}")
-    print(f"    from   {spec.protected_path}  (taken {preserved.get('taken_at')})")
+    print(f"    from   {baseline}")
     print(f"    to     {spec.crop_xml}")
-    if not drift:
-        print("\n  Already identical to the preserved optimized values. Nothing to do.\n")
+    if not changed:
+        print("\n  Already identical to the baseline. Nothing to do.\n")
         return 0
-    print(f"    {len(drift)} parameter(s) currently differ:")
-    for line in drift:
-        print(f"      {line}")
+    print(f"    {len(changed)} parameter(s) currently differ:")
+    for pid, change in changed.items():
+        print(f"      {pid}  {_fmt(change['from'])} -> {_fmt(change['to'])}")
 
     if not args.yes:
         print("\n  Nothing written. Re-run with --yes to restore.\n")
         return 0
 
-    common.apply_parameters(spec.crop_xml, spec.crop_name, preserved["parameters"])
-    remaining = cc.protected_drift(spec)
-    if remaining:
-        print("\n  RESTORE INCOMPLETE — these still differ after the write:")
-        for line in remaining:
-            print(f"      {line}")
-        return 1
+    shutil.copyfile(baseline, spec.crop_xml)
+    cc.sync_crop_xml(spec)
     shutil.copyfile(spec.crop_xml, spec.ledger_dir / "current_crop.xml")
     print("\n  restored. The ledger is untouched — the iterations that moved these "
           "values are still recorded.\n")
@@ -854,15 +794,14 @@ def build_parser() -> argparse.ArgumentParser:
     def shared(parser, target: bool = True):
         parser.add_argument("--crop", default="winter_wheat")
         if target:
-            parser.add_argument("--target", default="lai",
-                                choices=["phenology", "lai", "yield"])
+            parser.add_argument("--target", default="growth", choices=TARGETS)
         parser.add_argument("--config", default=str(cc.DEFAULT_CALIB_CONFIG))
         return parser
 
     p = shared(sub.add_parser("status", help="current parameters, bounds, history, stopping"))
     p.add_argument("--device", default="cluster", choices=["cluster", "local"])
     p.add_argument("--locations", type=int, help="override the subset size")
-    p.add_argument("--rebuild", action="store_true", help="rebuild the run dir from scratch")
+    p.add_argument("--rebuild", action="store_true", help="rebuild the run dirs from scratch")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_status)
 
@@ -882,9 +821,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", action="store_true", help="validate only, write nothing")
     p.add_argument("--force", action="store_true",
                    help="apply despite constraint violations (recorded in the ledger)")
-    p.add_argument("--allow-recalibration", action="store_true", dest="allow_recalibration",
-                   help="permit writes to a protected target (phenology). Without it, a "
-                        "protected target can only be validated, never changed.")
     p.set_defaults(func=cmd_run)
 
     p = shared(sub.add_parser("diagnose", help="diagnostics without simulating"))
@@ -901,33 +837,24 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--iteration", type=int, required=True)
     p.set_defaults(func=cmd_show)
 
-    p = shared(sub.add_parser("handoff", help="seed yield calibration from the LAI result"),
-               target=False)
+    p = shared(sub.add_parser(
+        "handoff", help="seed the growth stage from the phenology result"), target=False)
     p.add_argument("--device", default="cluster", choices=["cluster", "local"])
     p.add_argument("--locations", type=int)
     p.add_argument("--rebuild", action="store_true")
-    p.add_argument("--force", action="store_true", help="re-seed an existing yield study")
-    p.set_defaults(func=cmd_handoff, target="yield")
-
-    p = shared(sub.add_parser("verify-lai", help="has yield calibration degraded LAI?"),
-               target=False)
-    p.add_argument("--device", default="cluster", choices=["cluster", "local"])
-    p.add_argument("--locations", type=int)
-    p.add_argument("--rebuild", action="store_true")
-    p.add_argument("--skip-run", action="store_true")
-    p.set_defaults(func=cmd_verify_lai, target="lai")
+    p.add_argument("--force", action="store_true", help="re-seed an existing growth study")
+    p.set_defaults(func=cmd_handoff, target="growth")
 
     p = shared(sub.add_parser("promote", help="copy the best crop.xml into production"))
     p.add_argument("--yes", action="store_true", help="actually write (default: show the diff)")
     p.set_defaults(func=cmd_promote)
 
     p = shared(sub.add_parser(
-        "restore-optimized",
-        help="put a protected target's preserved optimized values back"))
+        "restore-baseline", help="put the stage's starting crop.xml back"))
     p.add_argument("--device", default="cluster", choices=["cluster", "local"])
     p.add_argument("--locations", type=int)
     p.add_argument("--yes", action="store_true", help="actually write (default: show the diff)")
-    p.set_defaults(func=cmd_restore_optimized, rebuild=False, target="phenology")
+    p.set_defaults(func=cmd_restore_baseline, rebuild=False)
 
     return ap
 

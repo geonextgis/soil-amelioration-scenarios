@@ -3,8 +3,8 @@
 Crop-model (SIMPLACE / LINTUL5) simulation framework for evaluating soil
 amelioration scenarios across baseline, historical, and future climate in Germany.
 
-**Crops** (phenology-, LAI- and yield-calibrated): winter wheat, winter rapeseed,
-spring barley, potato, maize.
+**Crops** (calibrated in two stages: phenology, then LAI + yield jointly):
+winter wheat, winter rapeseed, spring barley, potato, maize.
 
 **Experiment matrix:** 17 climate scenarios × 5 soil scenarios = **85 experiments**
 per crop.
@@ -20,7 +20,8 @@ per crop.
 ```
 data/raw/            soil scenarios, PointID -> grid mapping, site geometries
 notebooks/           00_exploration .. 04_evaluation (input prep + evaluation)
-optimization/        agentic calibration: local Ollama agents + Claude Code agents
+optimization/        agentic calibration in two stages (phenology, then joint
+                     LAI + yield): local Ollama agents + Claude Code agents
 orchestration/       experiments.yaml + generate.py (the 85-experiment matrix)
 simplace/<crop>/     the SIMPLACE model, inputs, and cluster runner
 ```

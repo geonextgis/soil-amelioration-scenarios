@@ -30,11 +30,11 @@ REVIEW_SCHEMA = """{
 
 
 class AnalystAgent(CalibrationAgent):
-    target = "lai"          # overridden per invocation
+    target = "growth"       # overridden per invocation
     agent_key = "analyst"
     prompt_file = "analyst.md"
 
-    def __init__(self, crop: str, backend, target: str = "lai", **kwargs):
+    def __init__(self, crop: str, backend, target: str = "growth", **kwargs):
         self.target = target
         super().__init__(crop, backend, **kwargs)
 
@@ -43,7 +43,7 @@ class AnalystAgent(CalibrationAgent):
         return "\n".join([
             f"# Calibration review — {status['crop']} · {status['target']}",
             "",
-            f"objective            {status.get('objective')} (lower is better)",
+            *self.render_objective(status),
             f"iterations completed {status.get('n_completed')}",
             f"best                 {json.dumps(status.get('best'))}",
             f"stopping             {json.dumps(status.get('stopping'))}",

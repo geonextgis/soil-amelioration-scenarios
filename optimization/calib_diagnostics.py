@@ -338,9 +338,9 @@ def phenology_plots(df: pd.DataFrame, out_dir: Path, title: str,
     return written
 
 
-def load_points(spec) -> pd.DataFrame | None:
+def load_points(run) -> pd.DataFrame | None:
     """PointID -> latitude, for the photoperiod signature. None if unavailable."""
-    path = spec.run.repo_root / "data" / "raw" / "point_to_nearest_grid.csv"
+    path = run.repo_root / "data" / "raw" / "point_to_nearest_grid.csv"
     if not path.exists():
         return None
     return pd.read_csv(path, usecols=["PointID", "Latitude", "Longitude"])
@@ -625,10 +625,10 @@ def lai_plots(pairs: pd.DataFrame, seasons: pd.DataFrame, bins: list[float],
     return written
 
 
-def load_lai_daily(spec, limit: int | None = 150) -> pd.DataFrame:
+def load_lai_daily(run, limit: int | None = 150) -> pd.DataFrame:
     """Full simulated daily LAI (not only the matched dates), for the season plots."""
     try:
-        sim = common.read_outputs(spec.run.out_dir, "daily", limit=limit)
+        sim = common.read_outputs(run.out_dir, "daily", limit=limit)
     except RuntimeError:
         return pd.DataFrame()
     sim = sim[sim["DevStage"] > 0].copy()
@@ -645,13 +645,13 @@ ATTRIBUTION_COLUMNS = ["Location", "Year", "Yield_t_ha", "AGBiomass_t_ha", "maxL
                        "Yield_translocated_t_ha", "TRANRF", "NNI", "NPKI"]
 
 
-def yield_attribution_frame(spec) -> pd.DataFrame:
+def yield_attribution_frame(run) -> pd.DataFrame:
     """District-year frame with the simulated state variables behind the yield."""
-    raw = common.read_outputs(spec.run.out_dir, "yearly")
+    raw = common.read_outputs(run.out_dir, "yearly")
     keep = [c for c in ATTRIBUTION_COLUMNS if c in raw.columns]
     sim = raw[keep].rename(columns={"Location": "location", "Year": "year"})
 
-    points = (pd.read_csv(spec.run.project_csv, sep=";",
+    points = (pd.read_csv(run.project_csv, sep=";",
                           usecols=["vLocationID", "vNUTS_ID", "vSTATE_NAME"])
               .drop_duplicates()
               .rename(columns={"vLocationID": "location", "vNUTS_ID": "NUTS_ID",
@@ -660,9 +660,9 @@ def yield_attribution_frame(spec) -> pd.DataFrame:
     value_cols = [c for c in sim.columns if c not in ("location", "year", "NUTS_ID", "STATE_NAME")]
     sim = sim.groupby(["NUTS_ID", "STATE_NAME", "year"], as_index=False)[value_cols].mean()
 
-    obs = pd.read_csv(spec.run.crop_dir / "data_observed" / f"yield_{spec.crop}.csv",
+    obs = pd.read_csv(run.crop_dir / "data_observed" / f"yield_{run.crop}.csv",
                       usecols=["NUTS_ID", "year", "yield"])
-    obs = obs.assign(**{"yield": obs["yield"] * spec.run.dm_fraction})
+    obs = obs.assign(**{"yield": obs["yield"] * run.dm_fraction})
     return sim.merge(obs, on=["NUTS_ID", "year"], how="inner")
 
 

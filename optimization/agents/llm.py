@@ -113,9 +113,17 @@ class OllamaBackend:
     model: str
     host: str = DEFAULT_HOST
     temperature: float = 0.2
-    num_ctx: int = 16384
+    num_ctx: int = 32768
     timeout: float = 900.0
     seed: int | None = 7  # fixed by default: a calibration decision should repeat
+    # Reasoning models (qwen3.x, deepseek-r1, …) emit a separate `thinking` field
+    # and, with a large prompt, spend the entire generation budget on it — leaving
+    # `content` empty or a truncated fragment of JSON. The chain of thought buys
+    # nothing here: the schema already demands `analysis` and `reasoning`, which
+    # land in the *output*, where the ledger can record them. So thinking is off.
+    think: bool = False
+    # Guarantees room for the answer instead of letting the prompt consume it all.
+    num_predict: int = 2048
 
     name: str = field(default="ollama", init=False)
 
@@ -169,17 +177,46 @@ class OllamaBackend:
             "model": self.model,
             "messages": messages,
             "stream": False,
-            "options": {"temperature": self.temperature, "num_ctx": self.num_ctx},
+            "think": self.think,
+            "options": {"temperature": self.temperature, "num_ctx": self.num_ctx,
+                        "num_predict": self.num_predict},
         }
         if self.seed is not None:
             payload["options"]["seed"] = self.seed
         if json_mode:
             payload["format"] = "json"
+
         response = self._post("/api/chat", payload)
-        content = (response.get("message") or {}).get("content", "")
-        if not content:
-            raise LLMError(f"Ollama returned no content: {json.dumps(response)[:300]}")
-        return content
+        message = response.get("message") or {}
+        content = message.get("content") or ""
+        thinking = message.get("thinking") or ""
+        done_reason = response.get("done_reason")
+
+        if content:
+            if done_reason == "length":
+                # Generation hit the ceiling: whatever came back is a fragment, and
+                # letting it through produces the useless "no JSON object" error one
+                # layer up instead of naming the actual cause.
+                raise LLMError(
+                    f"the reply was cut off after {response.get('eval_count', '?')} tokens "
+                    f"(done_reason=length). The prompt is using most of the {self.num_ctx}-token "
+                    f"window. Raise llm.num_ctx, or lower llm.history_iterations to shorten "
+                    f"the prompt.")
+            return content
+
+        # Empty content. If the model reasoned itself out of a budget, the JSON is
+        # sometimes still in the thinking text — worth a look before giving up.
+        if thinking:
+            try:
+                return json.dumps(extract_json(thinking))
+            except LLMError:
+                pass
+            raise LLMError(
+                f"the model produced {len(thinking)} characters of `thinking` and no answer. "
+                f"It is a reasoning model and thinking is consuming the generation budget — "
+                f"set llm.think: false (and/or raise llm.num_ctx above {self.num_ctx}).")
+
+        raise LLMError(f"Ollama returned no content: {json.dumps(response)[:300]}")
 
     def json_chat(self, messages: list[dict]) -> dict:
         return extract_json(self.chat(messages, json_mode=True))
@@ -244,7 +281,9 @@ def build_backend(llm_cfg: dict, agent: str, model: str | None = None,
         model=chosen,
         host=normalise_host(os.environ.get("OLLAMA_HOST") or llm_cfg.get("host", DEFAULT_HOST)),
         temperature=float(per_agent.get("temperature", 0.2)),
-        num_ctx=int(llm_cfg.get("num_ctx", 16384)),
+        num_ctx=int(llm_cfg.get("num_ctx", 32768)),
         timeout=float(llm_cfg.get("request_timeout", 900)),
         seed=per_agent.get("seed", llm_cfg.get("seed", 7)),
+        think=bool(per_agent.get("think", llm_cfg.get("think", False))),
+        num_predict=int(per_agent.get("num_predict", llm_cfg.get("num_predict", 2048))),
     )

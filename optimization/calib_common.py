@@ -17,14 +17,25 @@ search machinery. It owns four things and nothing else:
 
 Everything below this layer comes from ``common.py``: staging the isolated run
 dir, editing ``crop.xml``, invoking SIMPLACE, reading outputs. The losses come
-from ``objectives.py``. Neither depends on who proposed the parameters, which is
-what makes a local-agent iteration, a Claude iteration and a hand-typed one
-directly comparable.
+from ``objectives.py`` and the scoring from ``evaluation.py``. None of them
+depends on who proposed the parameters, which is what makes a local-agent
+iteration, a Claude iteration and a hand-typed one directly comparable.
+
+Stages and views
+----------------
+A calibration *stage* (``phenology``, ``growth``) owns one or more *views*. A
+view is one model run scored against one observation set. The growth stage has
+two — the GLASS-LAI point set and the district yield point set — because LAI and
+yield are observed on different points and cannot come out of a single run, yet
+their parameters are interdependent and must be moved together. One ``CalibSpec``
+therefore holds one ``RunSpec`` per view, all driven from a single ``crop.xml``:
+the first view's file is canonical and :func:`sync_crop_xml` mirrors it into the
+others before every simulation.
 
 Isolation contract
 ------------------
-Calibration runs live in ``simplace/<crop>/runs_optim/calib_<target>/``, one
-directory per target, so no two targets can disturb each other. Nothing writes to
+Calibration runs live in ``simplace/<crop>/runs_optim/<run_subdir>/<view>/``, so
+no two stages or views can disturb each other. Nothing writes to
 ``simplace/<crop>/data/crop/crop.xml`` except the explicit ``calibrate.py
 promote`` step.
 """
@@ -108,9 +119,9 @@ def load_calib_config(path: Path) -> dict:
     """Load calibration.yaml and merge in whatever ``extends:`` points at.
 
     config.yaml owns the model/run side (crops, climate, slurm, input profiles,
-    per-target run definitions); calibration.yaml owns the calibration side
-    (parameter spaces, constraints, freeze groups, stopping, llm). Keys defined in
-    calibration.yaml win.
+    the per-target views); calibration.yaml owns the calibration side (parameter
+    spaces, objective weights, constraints, freeze groups, stopping, llm). Keys
+    defined in calibration.yaml win.
     """
     path = Path(path)
     cfg = yaml.safe_load(path.read_text())
@@ -122,13 +133,18 @@ def load_calib_config(path: Path) -> dict:
         raise SystemExit(f"calibration config extends {base_name!r}, which does not exist: {base_path}")
     base = yaml.safe_load(base_path.read_text())
     merged = common._merge(base, cfg)
-    # `targets` means different things in the two files: run definitions in the
-    # base, parameter spaces here. Keep them apart rather than deep-merging two
-    # schemas that only share their keys.
+    # `targets` means different things in the two files: run definitions (views)
+    # in the base, parameter spaces here. Keep them apart rather than deep-merging
+    # two schemas that only share their keys.
     merged["targets"] = cfg.get("targets", {})
     merged["run_targets"] = base.get("targets", {})
     merged["_base_config"] = str(base_path)
     return merged
+
+
+def run_config(cfg: dict) -> dict:
+    """The base (run-side) config as ``common`` expects it: ``targets`` = views."""
+    return {**cfg, "targets": cfg.get("run_targets") or {}}
 
 
 # ---------------------------------------------------------------------------
@@ -539,9 +555,9 @@ def drop_frozen_from_space(space: dict, meta: dict, frozen: list[str]) -> list[s
     """Remove parameters that are declared *and* frozen. Returns what was dropped.
 
     A parameter can end up in both when a target declares it and also inherits a
-    freeze group that covers it — e.g. the yield target declaring
-    ``StemsPartitioningTableFraction`` while ``lai_calibrated`` freezes it and
-    ``frozen_exclude`` no longer excuses it.
+    freeze group that covers it — e.g. the growth stage declaring
+    ``PhotoperiodTableFactor`` while ``phenology_parameters`` freezes it and
+    ``frozen_exclude`` does not excuse it.
 
     Left alone, that produces the worst kind of lever: advertised with bounds and
     a meaning, rejected by the freeze guard every single time it is proposed. The
@@ -653,14 +669,11 @@ def frozen_ids(cfg: dict, target_cfg: dict) -> list[str]:
     groups = cfg.get("frozen_groups", {}) or {}
     out: list[str] = []
     for group in target_cfg.get("frozen", []) or []:
-        if group == "lai_calibrated":
-            out += list((cfg["targets"].get("lai", {}).get("parameters") or {}))
-        else:
-            if group not in groups:
-                raise SystemExit(f"unknown frozen group {group!r}; have {sorted(groups)}")
-            out += list(groups[group])
-    # A parameter that a later target needs as a structural counterweight (the stem
-    # fraction keeps above-ground allocation closed) must be excused explicitly.
+        if group not in groups:
+            raise SystemExit(f"unknown frozen group {group!r}; have {sorted(groups)}")
+        out += list(groups[group])
+    # A parameter a stage needs as a structural counterweight (the stem fraction
+    # keeps above-ground allocation closed) can be excused explicitly.
     excluded = set(target_cfg.get("frozen_exclude", []) or [])
     return sorted(set(out) - excluded)
 
@@ -704,18 +717,32 @@ def verify_frozen(xml_path: Path, snapshot: dict) -> list[str]:
 # ---------------------------------------------------------------------------
 @dataclass
 class CalibSpec:
-    """One agentic calibration target for one crop, fully resolved."""
+    """One calibration stage for one crop, fully resolved.
 
-    run: common.RunSpec          # staging / XML / SIMPLACE, reused from common.py
+    ``runs`` holds one ``RunSpec`` per view, in declaration order. The first view
+    owns the canonical ``crop.xml``; the others are mirrors of it.
+    """
+
+    runs: dict[str, common.RunSpec]
     cfg: dict
     target: str
     target_cfg: dict
     space: dict
     meta: dict
     frozen: list[str]
+    components: dict = field(default_factory=dict)   # view -> {weight, scale}
     constraints: list = field(default_factory=list)
-    # Filled in by stage(): row/location counts of the staged project table.
+    # Filled in by stage(): per view, the row/location counts of its project table.
     stage_info: dict = field(default_factory=dict)
+
+    @property
+    def views(self) -> list[str]:
+        return list(self.runs)
+
+    @property
+    def run(self) -> common.RunSpec:
+        """The primary view — the one whose crop.xml every other view mirrors."""
+        return self.runs[self.views[0]]
 
     @property
     def crop(self) -> str:
@@ -730,8 +757,12 @@ class CalibSpec:
         return self.run.crop_xml
 
     @property
+    def objective_name(self) -> str:
+        return (self.target_cfg.get("objective") or {}).get("name", self.target)
+
+    @property
     def ledger_dir(self) -> Path:
-        d = LEDGER_ROOT / f"{self.crop}__{self.target}"
+        d = LEDGER_ROOT / self.crop / self.target
         d.mkdir(parents=True, exist_ok=True)
         return d
 
@@ -748,15 +779,6 @@ class CalibSpec:
         return self.ledger_dir / "frozen_snapshot.json"
 
     @property
-    def protected_path(self) -> Path:
-        """Where a protected target's already-optimized values are preserved."""
-        return self.ledger_dir / "optimized_baseline.json"
-
-    @property
-    def protected(self) -> bool:
-        return bool(self.target_cfg.get("protected"))
-
-    @property
     def stopping(self) -> dict:
         return self.target_cfg.get("stopping", {}) or {}
 
@@ -766,92 +788,88 @@ class CalibSpec:
         return d
 
 
+def objective_components(cfg: dict, target: str, tcfg: dict, views: list[str]) -> dict:
+    """The stage's objective weights, checked against the views it actually has."""
+    components = ((tcfg.get("objective") or {}).get("components")) or {}
+    if not components:
+        raise SystemExit(f"target {target!r} declares no objective components")
+    unknown = [view for view in components if view not in views]
+    if unknown:
+        raise SystemExit(
+            f"objective of {target!r} names view(s) {unknown} that the run config "
+            f"does not define; it has {views}")
+    unscored = [view for view in views if view not in components]
+    if unscored:
+        raise SystemExit(
+            f"view(s) {unscored} of {target!r} would be simulated but not scored; "
+            f"give each of them a weight under targets.{target}.objective.components")
+    return components
+
+
 def load_spec(config_path: Path, crop: str, target: str, device: str = "cluster",
               n_locations: int | None = None) -> CalibSpec:
-    """Resolve one agentic calibration target.
-
-    Builds on ``common.load_spec`` (which validates the crop, resolves the repo
-    root, and stages the input profile) and then redirects the run to the agentic
-    run dir with the agentic parameter space and subset.
-    """
+    """Resolve one calibration stage: its views, its space, its freeze, its objective."""
     cfg = load_calib_config(Path(config_path))
     if target not in cfg["targets"]:
         raise SystemExit(f"unknown target {target!r}; calibration.yaml has {sorted(cfg['targets'])}")
     tcfg = cfg["targets"][target]
 
-    # common.load_spec resolves the crop, the repo root and the input profile
-    # from the base config; everything the calibration layer owns is replaced below.
-    base_cfg_path = Path(cfg.get("_base_config", OPTIM_DIR / "config.yaml"))
-    run = common.load_spec(base_cfg_path, crop, target, device=device)
+    base = run_config(cfg)
+    views = common.target_views(base, crop, target)
+    runs: dict[str, common.RunSpec] = {}
+    for view, vcfg in views.items():
+        if n_locations is not None:
+            vcfg = {**vcfg, "subset": {**(vcfg.get("subset") or {}),
+                                       "n_locations": n_locations}}
+        runs[view] = common.make_run(base, crop, target, view, vcfg, device=device)
 
-    subset = dict(tcfg.get("subset") or {})
-    if n_locations is not None:
-        subset["n_locations"] = n_locations
-
-    crop_dir = run.crop_dir
-    project_src = crop_dir / tcfg["project_csv"].format(crop=crop)
-    if not project_src.exists():
-        raise SystemExit(f"project table missing: {project_src}")
-
-    # The staged per-location tables follow calibration.yaml's `inputs:`, which may
-    # name a different profile than the base config's target of the same name.
-    inputs = run.inputs
-    profile_name = tcfg.get("inputs")
-    if profile_name:
-        profile = cfg["input_profiles"][profile_name]
-        inputs = {}
-        for role, rel in profile.items():
-            path = crop_dir / rel.format(crop=crop)
-            if not path.exists() and profile_name != "production":
-                path = crop_dir / cfg["input_profiles"]["production"][role].format(crop=crop)
-                print(f"  note: {profile_name} {role} table missing, using {path.name}")
-            if not path.exists():
-                raise SystemExit(f"required input missing: {path}")
-            inputs[role] = path
-
-    run = dataclasses.replace(
-        run,
-        run_dir=crop_dir / "runs_optim" / tcfg.get("run_subdir", f"calib_{target}"),
-        exp_name=tcfg["exp_name"],
-        project_src=project_src,
-        inputs=inputs,
-        subset=subset,
-    )
-
-    # The space must be resolved against the crop.xml this target will actually
-    # mutate. Before the first staging that file does not exist yet, so fall back
-    # to the production one — which is exactly what staging will copy in.
-    xml_for_space = run.crop_xml if run.crop_xml.exists() else crop_dir / "data" / "crop" / "crop.xml"
-    space, meta = resolve_space(xml_for_space, run.crop_name, tcfg.get("parameters") or {})
+    components = objective_components(cfg, target, tcfg, list(runs))
     frozen = frozen_ids(cfg, tcfg)
     constraints = tcfg.get("constraints") or []
-    drop_frozen_from_space(space, meta, frozen)
-    apply_closure_locks(space, meta, constraints, frozen, xml_for_space, run.crop_name)
-    run = dataclasses.replace(run, parameters=space)
 
-    return CalibSpec(
-        run=run, cfg=cfg, target=target, target_cfg=tcfg,
-        space=space, meta=meta,
-        frozen=frozen,
-        constraints=constraints,
-    )
+    spec = CalibSpec(runs=runs, cfg=cfg, target=target, target_cfg=tcfg,
+                     space={}, meta={}, frozen=frozen, components=components,
+                     constraints=constraints)
+    # The space must be resolved against the crop.xml this stage will actually
+    # mutate. Before the first staging that file does not exist yet, so fall back
+    # to the production one — which is exactly what staging will copy in.
+    production = spec.run.crop_dir / "data" / "crop" / "crop.xml"
+    refresh_space(spec, xml_path=spec.crop_xml if spec.crop_xml.exists() else production)
+    return spec
 
 
-def refresh_space(spec: CalibSpec) -> CalibSpec:
+def refresh_space(spec: CalibSpec, xml_path: Path | None = None) -> CalibSpec:
     """Re-resolve bounds against the staged crop.xml (call after build_run_dir).
 
     Bounds are relative to the *starting* values, so they must be anchored once
-    the run dir exists — in particular after a yield handoff replaces crop.xml
-    with the LAI-calibrated one.
+    the run dir exists — in particular after ``handoff`` replaces crop.xml with
+    the phenology-calibrated one.
     """
-    space, meta = resolve_space(spec.crop_xml, spec.crop_name,
+    xml_path = Path(xml_path or spec.crop_xml)
+    space, meta = resolve_space(xml_path, spec.crop_name,
                                 spec.target_cfg.get("parameters") or {})
     drop_frozen_from_space(space, meta, spec.frozen)
     apply_closure_locks(space, meta, spec.constraints, spec.frozen,
-                        spec.crop_xml, spec.crop_name)
+                        xml_path, spec.crop_name)
     spec.space, spec.meta = space, meta
-    spec.run = dataclasses.replace(spec.run, parameters=space)
     return spec
+
+
+def sync_crop_xml(spec: CalibSpec) -> list[Path]:
+    """Mirror the primary view's crop.xml into every other view.
+
+    The whole point of a joint stage is that both views see the *same* parameter
+    set: without this the yield run would be scored on the parameters of whichever
+    iteration last touched its own copy, and the two components of the objective
+    would describe different crops.
+    """
+    written = []
+    for view in spec.views[1:]:
+        target = spec.runs[view].crop_xml
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(spec.crop_xml, target)
+        written.append(target)
+    return written
 
 
 # ---------------------------------------------------------------------------
@@ -920,25 +938,10 @@ def stop_check(spec: CalibSpec) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Objectives — reuse the existing loss functions unchanged
-# ---------------------------------------------------------------------------
-def objective_for(target: str):
-    """``(process_result, loss_fn)`` for a target.
-
-    Deliberately a thin re-export of ``objectives.py``: whoever proposes the
-    parameters — Claude, a local Ollama agent, or a person typing
-    ``calibrate.py run`` by hand — the objective is computed by the same code, or
-    the ledgers cannot be compared.
-    """
-    import objectives
-    return objectives.for_target(target)
-
-
-# ---------------------------------------------------------------------------
 # Misc
 # ---------------------------------------------------------------------------
 def stage(spec: CalibSpec, rebuild: bool = False) -> dict:
-    """Stage the isolated run dir (``common.build_run_dir``) and anchor the space.
+    """Stage every view's run dir and anchor the space. Returns ``{view: info}``.
 
     A study that has not started yet is re-anchored on the production ``crop.xml``.
     ``build_run_dir`` deliberately leaves an existing ``data/crop/`` alone — it has
@@ -948,9 +951,9 @@ def stage(spec: CalibSpec, rebuild: bool = False) -> dict:
     its baseline and anchor every relative bound on it. An empty ledger means
     nothing has been recorded yet, so there is nothing to preserve.
 
-    The handoff is the one exception: it writes the LAI-calibrated crop.xml into
-    the yield run dir *before* the yield ledger exists, and ``provenance.json``
-    is how that intent is marked.
+    The handoff is the one exception: it writes the phenology-calibrated crop.xml
+    into the growth run dir *before* the growth ledger exists, and
+    ``provenance.json`` is how that intent is marked.
     """
     n_recorded = len(read_ledger(spec))
     if rebuild and n_recorded:
@@ -966,7 +969,8 @@ def stage(spec: CalibSpec, rebuild: bool = False) -> dict:
               f"           archive the ledger first: mv {spec.ledger_dir} "
               f"{spec.ledger_dir}.bak")
 
-    info = common.build_run_dir(spec.run, rebuild=rebuild)
+    info = {view: common.build_run_dir(run, rebuild=rebuild)
+            for view, run in spec.runs.items()}
 
     production = spec.run.crop_dir / "data" / "crop" / "crop.xml"
     fresh = not spec.ledger_path.exists() and not (spec.ledger_dir / "provenance.json").exists()
@@ -976,6 +980,7 @@ def stage(spec: CalibSpec, rebuild: bool = False) -> dict:
             print(f"  note: no iterations recorded for {spec.crop}/{spec.target} yet — "
                   f"reset the run-dir crop.xml from {production}")
 
+    sync_crop_xml(spec)
     refresh_space(spec)
     return info
 
@@ -987,33 +992,6 @@ def ensure_frozen_snapshot(spec: CalibSpec) -> dict:
     snapshot = snapshot_frozen(spec.crop_xml, spec.crop_name, spec.frozen)
     spec.frozen_path.write_text(json.dumps(snapshot, indent=2) + "\n")
     return snapshot
-
-
-def ensure_protected_baseline(spec: CalibSpec) -> dict:
-    """Preserve a protected target's already-optimized values, once.
-
-    The phenology set was calibrated in an earlier phase and lives in the
-    production ``crop.xml``. Before a recalibration is ever allowed to touch it,
-    the starting values are written here so the original is recoverable from the
-    ledger alone — independent of version control, and independent of whatever
-    the recalibration then does.
-    """
-    if spec.protected_path.exists():
-        return json.loads(spec.protected_path.read_text())
-    snapshot = snapshot_frozen(spec.crop_xml, spec.crop_name, sorted(spec.meta))
-    snapshot["note"] = (
-        f"Values of the {spec.target} parameters as they stood before any agentic "
-        f"iteration. Restore with: calibrate.py restore-optimized --crop {spec.crop} "
-        f"--target {spec.target}")
-    spec.protected_path.write_text(json.dumps(snapshot, indent=2) + "\n")
-    return snapshot
-
-
-def protected_drift(spec: CalibSpec) -> list[str]:
-    """How the current XML differs from the preserved optimized values."""
-    if not spec.protected_path.exists():
-        return []
-    return verify_frozen(spec.crop_xml, json.loads(spec.protected_path.read_text()))
 
 
 def describe_space(spec: CalibSpec) -> list[dict]:

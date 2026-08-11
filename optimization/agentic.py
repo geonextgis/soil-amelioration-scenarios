@@ -7,14 +7,15 @@ a hand-written one, SIMPLACE runs on the cluster, and the result comes back as
 the next iteration's evidence. There is no sampler and no external service.
 
     python optimization/agentic.py check
-    python optimization/agentic.py validate-phenology --crop winter_wheat
-    python optimization/agentic.py run   --crop winter_wheat --target lai --iterations 8
-    python optimization/agentic.py step  --crop winter_wheat --target lai
-    python optimization/agentic.py propose --crop winter_wheat --target lai
-    python optimization/agentic.py review  --crop winter_wheat --target lai
+    python optimization/agentic.py run     --crop winter_wheat --target phenology
+    python optimization/agentic.py run     --crop winter_wheat --target growth --iterations 8
+    python optimization/agentic.py step    --crop winter_wheat --target growth
+    python optimization/agentic.py propose --crop winter_wheat --target growth
+    python optimization/agentic.py review  --crop winter_wheat --target growth
 
-The calibration order is phenology (already done — validate only), then LAI, then
-``calibrate.py handoff``, then yield. ``run`` respects the stopping criteria in
+Two stages, in this order: ``phenology`` from scratch, then ``calibrate.py
+promote --target phenology --yes`` and ``calibrate.py handoff``, then ``growth``
+— LAI and yield calibrated jointly. ``run`` respects the stopping criteria in
 calibration.yaml; ``--iterations`` caps the session on top of them.
 
 Nothing here can write to ``simplace/<crop>/data/crop/crop.xml``. Promoting a
@@ -44,12 +45,10 @@ def _backend(args, agent_key: str):
 def _agent(args, target: str | None = None):
     target = target or args.target
     backend = _backend(args, target)
-    kwargs = dict(crop=args.crop, backend=backend, config_path=Path(args.config),
-                  locations=getattr(args, "locations", None),
-                  device=getattr(args, "device", "cluster"))
-    if target == "phenology":
-        kwargs["mode"] = getattr(args, "mode", "validate")
-    agent = ag.AGENTS[target](**kwargs)
+    agent = ag.AGENTS[target](crop=args.crop, backend=backend,
+                              config_path=Path(args.config),
+                              locations=getattr(args, "locations", None),
+                              device=getattr(args, "device", "cluster"))
 
     ok, detail = backend.available()
     if not ok:
@@ -168,17 +167,6 @@ def cmd_review(args) -> int:
     return 0
 
 
-def cmd_validate_phenology(args) -> int:
-    """Score the already-optimized phenology. Changes nothing, needs no model."""
-    agent = ag.PhenologyAgent(
-        crop=args.crop, backend=ag.MockBackend(replies=[]), mode="validate",
-        config_path=Path(args.config), locations=getattr(args, "locations", None),
-        device=args.device)
-    summary = agent.loop()
-    print("\nJSON " + json.dumps(summary, default=str))
-    return 0
-
-
 # ---------------------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
@@ -189,8 +177,8 @@ def build_parser() -> argparse.ArgumentParser:
         parser.add_argument("--crop", default="winter_wheat")
         parser.add_argument("--config", default=str(cc.DEFAULT_CALIB_CONFIG))
         if target:
-            parser.add_argument("--target", default="lai",
-                                choices=["phenology", "lai", "yield"])
+            parser.add_argument("--target", default="growth",
+                                choices=["phenology", "growth"])
             parser.add_argument("--model", help="override the configured Ollama model")
         if scope:
             parser.add_argument("--device", default="cluster", choices=["cluster", "local"])
@@ -205,26 +193,16 @@ def build_parser() -> argparse.ArgumentParser:
     p = shared(sub.add_parser("run", help="iterate until the stopping criteria are met"))
     p.add_argument("--iterations", type=int,
                    help="cap this session (default: the target's max_iterations)")
-    p.add_argument("--mode", default="validate", choices=["validate", "recalibrate"],
-                   help="phenology only: recalibrate permits parameter writes")
     p.set_defaults(func=cmd_run)
 
     p = shared(sub.add_parser("step", help="one iteration, then stop"))
-    p.add_argument("--mode", default="validate", choices=["validate", "recalibrate"])
     p.set_defaults(func=cmd_step)
 
     p = shared(sub.add_parser("propose", help="get a decision without running the model"))
-    p.add_argument("--mode", default="validate", choices=["validate", "recalibrate"])
     p.set_defaults(func=cmd_propose)
 
     p = shared(sub.add_parser("review", help="read-only analysis of the calibration so far"))
     p.set_defaults(func=cmd_review)
-
-    p = shared(sub.add_parser(
-        "validate-phenology",
-        help="score the optimized phenology without changing it (no model needed)"),
-        target=False)
-    p.set_defaults(func=cmd_validate_phenology)
 
     return ap
 

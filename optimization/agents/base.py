@@ -1,7 +1,8 @@
 #!/usr/bin/env python
 """The calibration loop a local agent runs, and the tools it is allowed to use.
 
-One iteration is always the same ten steps, whichever target is being calibrated:
+One iteration is always the same ten steps, whichever stage is being calibrated
+(``phenology``, then the joint ``growth`` stage):
 
      1. inspect the current parameters, their bounds and their meaning
      2. inspect the history — every previous iteration and its outcome
@@ -10,7 +11,7 @@ One iteration is always the same ten steps, whichever target is being calibrated
      5. propose a change, with a stated reason and expected effect
      6. pre-flight it (bounds, table shape, closure, blast radius) — free
      7. repair and retry if the pre-flight rejects it
-     8. run SIMPLACE
+     8. run SIMPLACE — once per view of the stage
      9. score it with the objective and re-derive the diagnostics
     10. compare against every previous iteration; stop or go again
 
@@ -53,14 +54,28 @@ PROPOSAL_SCHEMA = """{
   "analysis":        "<what the diagnostics show, in 2-4 sentences>",
   "hypothesis":      "<the single mechanism you think is responsible>",
   "parameter":       "<the parameter id you are changing>",
-  "parameter_changes": { "<parameter id>": <new value, or {"<index>": <new value>} for one
-                                            element of a table, or [full, new, table] > },
+  "parameter_changes": { "<parameter id>": <new value> },
   "reason":          "<one line: the evidence that points at THIS parameter>",
   "reasoning":       "<why this direction and this magnitude; what you ruled out and why>",
   "expected_effect": "<what should change in the metrics if the hypothesis is right>",
   "confidence":      <0.0-1.0>,
   "stop":            <true only if no further change is justified>
-}"""
+}
+
+The keys of "parameter_changes" are ALWAYS parameter ids, never indices. Three
+forms of value are accepted:
+
+  a scalar          "parameter_changes": {"RGRLAI": 0.021}
+  one table element "parameter_changes": {"RUETableRUE": {"2": 3.1}}
+  a whole table     "parameter_changes": {"RUETableRUE": [3.8, 3.8, 3.1, 1.27]}
+
+To change element 2 of RUETableRUE to 3.1, the correct reply is:
+
+  "parameter": "RUETableRUE",
+  "parameter_changes": {"RUETableRUE": {"2": 3.1}}
+
+NOT {"2": 3.1} — an index at the top level has no parameter name attached to it
+and will be rejected."""
 
 
 @dataclass
@@ -79,11 +94,28 @@ class Decision:
 
     @classmethod
     def from_reply(cls, reply: dict) -> "Decision":
+        named = reply.get("parameter")
         changes = reply.get("parameter_changes")
-        if changes is None and reply.get("parameter") and "value" in reply:
-            # Tolerated shorthand: some models answer with parameter/value instead
-            # of the map. Accepting it costs nothing and saves a repair round-trip.
-            changes = {reply["parameter"]: reply["value"]}
+
+        # Tolerated shorthands. None of these is the documented schema, but all
+        # three are shapes a local model produces regularly, and every one of them
+        # is unambiguous — so accepting them saves a repair round-trip that buys
+        # nothing. Anything genuinely ambiguous still goes back for repair.
+        if changes is None and named and "value" in reply:
+            #   {"parameter": "RGRLAI", "value": 0.02}
+            changes = {named: reply["value"]}
+        elif changes is None and named and "index" in reply and "new_value" in reply:
+            #   {"parameter": "RUETableRUE", "index": 2, "new_value": 3.1}
+            changes = {named: {str(reply["index"]): reply["new_value"]}}
+        elif (isinstance(changes, dict) and changes and named
+              and all(str(k).lstrip("-").isdigit() for k in changes)):
+            # The index map was hoisted to the top level and the parameter name
+            # left behind in `parameter`:
+            #   {"parameter": "RUETableRUE", "parameter_changes": {"2": 3.1}}
+            # A real parameter id is never all digits, so this cannot collide with
+            # a well-formed proposal.
+            changes = {named: changes}
+
         if changes is None:
             changes = {}
         if not isinstance(changes, dict):
@@ -183,10 +215,31 @@ def render_parameters(rows: list[dict]) -> str:
     return "\n".join(out)
 
 
-def render_history(records: list[dict]) -> str:
+def render_history(records: list[dict], max_full: int = 12) -> str:
+    """The calibration history, with the older half compressed.
+
+    Rendered in full this grows without bound — 21 iterations was already 28k
+    characters, most of a 16k-token window before the diagnostics were even added.
+    The recent iterations are what a decision turns on; the older ones only need to
+    say what was tried and whether it worked, so a parameter is not re-proposed.
+    """
     if not records:
         return "  (nothing yet — this will be the baseline)"
+
     out = []
+    if len(records) > max_full:
+        earlier, records = records[:-max_full], records[-max_full:]
+        out.append(f"  Iterations 0-{earlier[-1]['iteration']} in brief "
+                   f"(do not repeat a change that did not work):")
+        for r in earlier:
+            objective = ("FAILED" if r.get("objective") is None
+                         else f"{r['objective']:.4f}")
+            changed = ", ".join(sorted(r.get("parameters_changed") or {})) or "baseline"
+            mark = "improved" if r.get("improved") else "no"
+            out.append(f"    iter {r['iteration']:>3}  {objective:>9}  {mark:>8}  {changed}")
+        out.append("")
+        out.append(f"  Most recent {len(records)} iterations in full:")
+
     for r in records:
         objective = ("FAILED" if r.get("objective") is None
                      else f"{r['objective']:.4f}")
@@ -223,13 +276,12 @@ class CalibrationAgent:
 
     def __init__(self, crop: str, backend, config_path: Path | None = None,
                  locations: int | None = None, device: str = "cluster",
-                 allow_recalibration: bool = False, verbose: bool = True):
+                 verbose: bool = True):
         self.crop = crop
         self.backend = backend
         self.config_path = Path(config_path or cc.DEFAULT_CALIB_CONFIG)
         self.locations = locations
         self.device = device
-        self.allow_recalibration = allow_recalibration
         self.verbose = verbose
         self.cfg = cc.load_calib_config(self.config_path)
         self.llm_cfg = self.cfg.get("llm") or {}
@@ -276,19 +328,33 @@ class CalibrationAgent:
         return json.loads(proc.stdout[proc.stdout.index("["):])
 
     def preflight(self, parameters: dict) -> dict:
-        """Validate a proposal without running the model. Free, so always do it."""
+        """Validate a proposal without running the model. Free, so always do it.
+
+        Always returns a verdict, never raises. A pre-flight that cannot be parsed
+        is itself a rejection the model needs to see — raising here would abort the
+        whole calibration over one mis-shaped reply, which is the opposite of what
+        the repair loop is for.
+        """
         argv = ["run", *self._scope(), "--dry-run"]
         if parameters:
             argv += ["--params", json.dumps(parameters)]
-        if self.allow_recalibration:
-            argv.append("--allow-recalibration")
         proc = self._calibrate(*argv)
-        try:
-            return json.loads(proc.stdout[proc.stdout.index("{"):])
-        except (ValueError, json.JSONDecodeError):
-            raise AgentError(
-                f"pre-flight produced no verdict (rc={proc.returncode}):\n"
-                f"{proc.stdout}\n{proc.stderr}")
+
+        start = proc.stdout.find("{")
+        if start >= 0:
+            try:
+                return json.loads(proc.stdout[start:])
+            except json.JSONDecodeError:
+                pass
+
+        # No verdict on stdout: calibrate.py died before it could produce one.
+        # The reason is on stderr, and it is exactly what the model has to read.
+        detail = " ".join((proc.stderr or proc.stdout or "unknown error").split())
+        return {
+            "valid": False,
+            "violations": [{"constraint": "proposal_rejected", "parameter": None,
+                            "message": detail[:600]}],
+        }
 
     def execute(self, decision: Decision) -> dict:
         """Apply, run SIMPLACE, score, record. Blocks for the whole simulation."""
@@ -299,8 +365,6 @@ class CalibrationAgent:
                  "--hypothesis", decision.hypothesis,
                  "--reasoning", self._reasoning_blob(decision),
                  "--expected-effect", decision.expected_effect]
-        if self.allow_recalibration:
-            argv.append("--allow-recalibration")
 
         proc = self._calibrate(*argv)
         if self.verbose:
@@ -337,6 +401,21 @@ class CalibrationAgent:
                 return record["iteration"], record["diagnostics"]
         return None, {}
 
+    @staticmethod
+    def render_objective(status: dict) -> list[str]:
+        """The objective, its components and what each view simulates."""
+        out = [f"objective function     {status.get('objective')}   (lower is better)"]
+        components = status.get("objective_components") or {}
+        if len(components) > 1:
+            out.append("components             a weighted mean of the scaled per-view "
+                       "losses; 1.0 = every component at its target")
+        for view, cfg in components.items():
+            scope = (status.get("scope") or {}).get(view) or {}
+            out.append(f"  view {view:<12s} weight {cfg.get('weight')}, scale "
+                       f"{cfg.get('scale')}   ({scope.get('rows')} rows / "
+                       f"{scope.get('locations')} locations, {scope.get('subset')})")
+        return out
+
     def context(self, status: dict, history: list[dict]) -> str:
         iteration, diagnostics = self.latest_diagnostics(history)
         best = status.get("best")
@@ -347,15 +426,13 @@ class CalibrationAgent:
         return "\n".join([
             f"# Calibration state — {status['crop']} · {status['target']}",
             "",
-            f"objective function     {status.get('objective')}   (lower is better)",
+            *self.render_objective(status),
             f"iterations completed   {status.get('n_completed')}",
             f"next iteration         {status.get('next_iteration')}",
             f"best so far            " + (
                 "none yet" if not best
                 else f"iteration {best['iteration']}, objective {best['objective']:.4f}"),
             f"stopping               {stopping.get('reason')}",
-            f"simulation scope       {status.get('project_rows')} rows / "
-            f"{status.get('project_locations')} locations, {status.get('subset')}",
             # Listed in full, never truncated. The frozen set is sorted, so any cut
             # would drop the tail — which is where the thermal-time parameters live,
             # and those are exactly the ones a model reaches for when the timing of
@@ -375,14 +452,14 @@ class CalibrationAgent:
             f"You may change at most {max_changed} parameter(s) in one iteration.",
             "",
             "## Diagnostics of the most recent completed iteration"
-            + (f" (iteration {iteration})" if iteration is not None else ""),
+            + (f" (iteration {iteration}, one block per view)" if iteration is not None else ""),
             "",
             json.dumps(compact(diagnostics), indent=2) if diagnostics
             else "  (none yet)",
             "",
             "## Everything that has already been tried",
             "",
-            render_history(history),
+            render_history(history, max_full=int(self.llm_cfg.get("history_iterations", 12))),
             "",
             "## Your reply",
             "",
@@ -426,15 +503,11 @@ class CalibrationAgent:
                 return decision
 
             verdict = self.preflight(decision.parameters)
-            if verdict.get("valid") and not verdict.get("blocked_by_protection"):
+            if verdict.get("valid"):
                 return decision
 
             problems = [f"[{v['constraint']}] {v['message']}"
                         for v in verdict.get("violations", [])]
-            if verdict.get("blocked_by_protection"):
-                problems.append(
-                    "this target is protected and the run was not started with "
-                    "--allow-recalibration, so its parameters cannot be changed")
             last_error = "; ".join(problems) or "rejected without a reason"
             self.log(f"    pre-flight rejected the proposal [{attempt + 1}/{attempts}]:")
             for problem in problems:
@@ -509,7 +582,15 @@ class CalibrationAgent:
             if status["stopping"]["stop"] and status["n_completed"] > 0:
                 stopped = status["stopping"]["reason"]
                 break
-            result = self.iterate()
+            try:
+                result = self.iterate()
+            except AgentError as exc:
+                # An unusable model reply ends the session, it does not crash it.
+                # Everything already in the ledger stays valid and the next run
+                # resumes from it; a traceback here would suggest otherwise.
+                stopped = f"stopped after an unusable model reply: {exc}"
+                self.log(f"\n  {stopped}")
+                break
             if result.get("stopped_by_agent"):
                 stopped = f"the agent stopped: {result.get('reason')}"
                 break
@@ -536,6 +617,6 @@ class CalibrationAgent:
         if summary["best"]:
             self.log(f"  best: iteration {summary['best']['iteration']}  "
                      f"objective {summary['best']['objective']:.4f}")
-        self.log(f"  frozen phenology intact: {summary['frozen_intact']}")
+        self.log(f"  frozen parameters intact: {summary['frozen_intact']}")
         self.log("=" * 78)
         return summary

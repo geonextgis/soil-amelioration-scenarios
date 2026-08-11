@@ -1,22 +1,23 @@
 #!/usr/bin/env python
-"""The three calibration losses: phenology, LAI, yield.
+"""The three calibration losses — one per *view*: phenology, LAI, yield.
 
-Each target owns exactly two functions:
+A view is one model run scored against one observation set. Each owns exactly
+two functions:
 
     process_result(run_spec) -> DataFrame   join simulated output to observations
     loss_fn(frame)           -> (loss, metrics)
 
+A calibration *stage* is one or more views plus the weights that combine them
+(:func:`combine`). Stage 1 (phenology) has a single view; stage 2 (growth) scores
+the LAI and yield views together, which is what makes the two interdependent
+parameter sets calibratable in one loop.
+
 Nothing here decides anything. These are pure scoring functions — the decision
-layer (``calib_common``/``agents/``) reads the loss and the diagnostics derived
+layer (``calibrate.py``/``agents/``) reads the loss and the diagnostics derived
 from the same frames and chooses the next parameter move.
 
-They previously lived in ``optimize_{phenology,lai,yield}.py`` alongside an
-Optuna trial driver. The drivers are gone; the losses are unchanged, so an
-objective recorded before the removal is directly comparable with one recorded
-after it.
-
     import objectives
-    process_result, loss_fn = objectives.for_target("lai")
+    process_result, loss_fn = objectives.for_view("lai")
 """
 from __future__ import annotations
 
@@ -326,18 +327,59 @@ def yield_loss_fn(df: pd.DataFrame) -> tuple[float, dict]:
 
 
 # ===========================================================================
-# Registry
+# Registry + combination
 # ===========================================================================
-TARGETS = {
+VIEWS = {
     "phenology": (phenology_process_result, phenology_loss_fn),
     "lai": (lai_process_result, lai_loss_fn),
     "yield": (yield_process_result, yield_loss_fn),
 }
 
 
-def for_target(target: str):
-    """``(process_result, loss_fn)`` for one target."""
-    if target not in TARGETS:
-        raise SystemExit(
-            f"no objective registered for target {target!r}; have {sorted(TARGETS)}")
-    return TARGETS[target]
+def for_view(view: str):
+    """``(process_result, loss_fn)`` for one view."""
+    if view not in VIEWS:
+        raise SystemExit(f"no loss registered for view {view!r}; have {sorted(VIEWS)}")
+    return VIEWS[view]
+
+
+def combine(components: dict, losses: dict) -> tuple[float, dict]:
+    """Weighted mean of the per-view losses, each divided by its own scale.
+
+        objective = sum( weight_i * loss_i / scale_i ) / sum( weight_i )
+
+    ``scale`` is the loss value at which a component counts as 1.0 — its target.
+    That makes components with different units (LAI in m2/m2, yield in t/ha)
+    commensurable and gives the combined objective a fixed meaning: **1.0 means
+    every component sits at its target on average**, and no component can be
+    traded away silently because its contribution is recorded here.
+
+    A single-view stage with ``scale: 1.0`` reduces to the raw loss, so the
+    phenology objective is still an RMSE in days.
+    """
+    if not components:
+        raise SystemExit("the objective declares no components")
+    missing = [view for view in components if view not in losses]
+    if missing:
+        raise SystemExit(f"no loss computed for objective component(s): {missing}")
+
+    breakdown, total, weights = {}, 0.0, 0.0
+    for view, cfg in components.items():
+        weight = float(cfg.get("weight", 1.0))
+        scale = float(cfg.get("scale", 1.0))
+        if scale <= 0:
+            raise SystemExit(f"objective component {view!r} has a non-positive scale")
+        scaled = float(losses[view]) / scale
+        total += weight * scaled
+        weights += weight
+        breakdown[view] = {"loss": round(float(losses[view]), 6), "scale": scale,
+                           "weight": weight, "scaled": round(scaled, 6),
+                           "contribution": round(weight * scaled, 6)}
+    if weights <= 0:
+        raise SystemExit("objective component weights sum to zero")
+
+    objective = total / weights
+    for view in breakdown:
+        breakdown[view]["share_of_objective"] = round(
+            breakdown[view]["contribution"] / weights / objective, 4) if objective else None
+    return float(objective), breakdown

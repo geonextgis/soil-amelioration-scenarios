@@ -20,7 +20,7 @@ and never run a simulation.
 | Observations | `simplace/<crop>/data_observed/{LAI,phenology,yield}_<crop>.csv` |
 | Simulation output | `simplace/<crop>/runs*/…/out/<EXP>/{daily,yearly}/<location>_*.csv`, `;`-delimited |
 | Agentic parameter space, bounds, constraints, freeze list | `optimization/calibration.yaml` |
-| Calibration ledger | `optimization/calibration/<crop>__<target>/` |
+| Calibration ledger | `optimization/calibration/<crop>/<stage>/` (`phenology`, `growth`) |
 | The loss functions that define the objective | `optimization/objectives.py` |
 
 Read the actual files. Never answer from memory about a parameter's value,
@@ -31,7 +31,7 @@ every downstream decision.
 ## The causal chain you are reasoning about
 
 ```
-temperature -> TSUM1/TSUM2 -> DVS                       [FROZEN — already calibrated]
+temperature -> TSUM1/TSUM2 -> DVS                       [stage 1; FROZEN in stage 2]
 DVS + SLA table            -> leaf area per unit leaf weight
 TDWI, RGRLAI               -> initial and exponential-phase LAI
 leaf partitioning x RUE    -> leaf weight
@@ -43,14 +43,17 @@ LAICR/RDRSHM, RDRLeaves/DVSDLT, RDRNS, RDRL -> leaf death -> LAI decline
 
 Two consequences the calibration agents must hear from you when relevant:
 
-1. **DVS is frozen.** Anything expressed as "the simulated curve peaks too early"
-   is mostly a phenology statement, and phenology is not up for recalibration.
-   Only the leaf-death timing (`DVSDLT`) is a legitimate timing lever, and it
-   moves senescence onset, not the whole curve.
-2. **LAI and yield are not independent.** `RUETableRUE`, `KDIFTableK` and the
-   partitioning tables change biomass, and biomass changes leaf weight, and leaf
-   weight changes LAI. Those parameters are tagged `affects_lai` in
-   `calibration.yaml` for exactly this reason.
+1. **DVS is frozen during stage 2.** Anything expressed as "the simulated curve
+   peaks too early" is mostly a phenology statement, and phenology is settled in
+   stage 1. Inside the growth stage only the leaf-death timing (`DVSDLT`) and the
+   N-translocation thresholds (`DVSNT`, `DVSNLT`) are legitimate timing levers,
+   and they are thresholds *on* DVS, not drivers of it.
+2. **LAI and yield are not independent — which is why they are calibrated
+   jointly.** `RUETableRUE`, `KDIFTableK` and the partitioning tables change
+   biomass, biomass changes leaf weight, and leaf weight changes LAI. Those
+   parameters are tagged `affects_lai` in `calibration.yaml`. The growth stage
+   scores both observations in the same iteration, so when you rank candidates,
+   say what each one does to *both* components.
 
 ## What to produce
 
@@ -60,8 +63,8 @@ line references. When the question is "which parameter should move", give:
 - the candidate parameters, ranked, each with the observable signature that would
   confirm it;
 - what else each one perturbs (the side effects), especially across LAI/yield;
-- whether it is frozen for the target in question, and its resolved bounds
-  (`python optimization/calibrate.py status --crop <crop> --target <target> --json`);
+- whether it is frozen for the stage in question, and its resolved bounds
+  (`python optimization/calibrate.py status --crop <crop> --target <phenology|growth> --json`);
 - what evidence would *discriminate* between the top candidates.
 
 Be concrete about numbers. "SLA is high" is not useful; "SLATableSLA[3]=0.0125

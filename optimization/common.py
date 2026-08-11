@@ -57,18 +57,24 @@ SYMLINK_MANAGEMENT_FILES = ["management.xml", "fertilizer_composition.xml"]
 # ---------------------------------------------------------------------------
 @dataclass
 class RunSpec:
-    """Everything one model run needs, with every path already absolute."""
+    """Everything one model run needs, with every path already absolute.
+
+    A calibration stage may need more than one run to be scored: the joint
+    LAI+yield stage evaluates the canopy on the GLASS-LAI point set and the yield
+    on the district point set, from the same ``crop.xml``. Each of those is one
+    ``RunSpec``, distinguished by ``view``.
+    """
 
     crop: str
     crop_name: str
     target: str
+    view: str
     repo_root: Path
     crop_dir: Path
     run_dir: Path
     exp_name: str
     project_src: Path
     inputs: dict[str, Path]
-    parameters: dict
     subset: dict
     mount_data: str
     slurm: dict
@@ -126,16 +132,37 @@ def _merge(base: dict, extra: dict) -> dict:
     return out
 
 
-def load_spec(config_path: Path, crop: str, target: str, device: str = "cluster") -> RunSpec:
-    cfg = yaml.safe_load(Path(config_path).read_text())
+def target_views(cfg: dict, crop: str, target: str) -> dict[str, dict]:
+    """``{view name: view config}`` for one target, with per-crop overrides merged.
 
-    if crop not in cfg["crops"]:
-        raise SystemExit(f"unknown crop {crop!r}; config has {sorted(cfg['crops'])}")
-    if target not in cfg["targets"]:
-        raise SystemExit(f"unknown target {target!r}; config has {sorted(cfg['targets'])}")
+    A target declares one or more views under ``targets.<target>.views``. Each is
+    a complete run definition (project table, input profile, output namespace,
+    subset); the target-level ``run_subdir`` is folded into each of them so a
+    view config is self-contained from here on.
+    """
+    if target not in (cfg.get("targets") or {}):
+        raise SystemExit(f"unknown target {target!r}; config has {sorted(cfg.get('targets') or {})}")
+    tcfg = cfg["targets"][target]
+    crop_cfg = (cfg.get("crops") or {}).get(crop) or {}
+    override = ((crop_cfg.get("targets") or {}).get(target) or {}).get("views") or {}
 
+    views = tcfg.get("views") or {}
+    if not views:
+        raise SystemExit(f"target {target!r} declares no views")
+    out = {}
+    for name, vcfg in views.items():
+        merged = _merge(vcfg, override.get(name, {}))
+        merged.setdefault("run_subdir", tcfg.get("run_subdir", f"calib_{target}"))
+        out[name] = merged
+    return out
+
+
+def make_run(cfg: dict, crop: str, target: str, view: str, vcfg: dict,
+             device: str = "cluster") -> RunSpec:
+    """One run of one view, with every path resolved against the config."""
+    if crop not in (cfg.get("crops") or {}):
+        raise SystemExit(f"unknown crop {crop!r}; config has {sorted(cfg.get('crops') or {})}")
     crop_cfg = cfg["crops"][crop] or {}
-    tcfg = _merge(cfg["targets"][target], (crop_cfg.get("targets") or {}).get(target, {}))
 
     repo_root = resolve_repo_root(cfg)
     crop_dir = repo_root / "simplace" / crop
@@ -147,7 +174,7 @@ def load_spec(config_path: Path, crop: str, target: str, device: str = "cluster"
 
     # Staged per-location tables, with a graceful fallback when a crop has no
     # *_LAI variants (only the LAI-calibrated crops carry those).
-    profile_name = tcfg.get("inputs", "production")
+    profile_name = vcfg.get("inputs", "production")
     profile = cfg["input_profiles"][profile_name]
     inputs: dict[str, Path] = {}
     for role, rel in profile.items():
@@ -160,7 +187,7 @@ def load_spec(config_path: Path, crop: str, target: str, device: str = "cluster"
             raise SystemExit(f"required input missing: {path}")
         inputs[role] = path
 
-    project_src = crop_dir / fmt(tcfg["project_csv"])
+    project_src = crop_dir / fmt(vcfg["project_csv"])
     if not project_src.exists():
         raise SystemExit(f"project table missing: {project_src}")
 
@@ -168,19 +195,31 @@ def load_spec(config_path: Path, crop: str, target: str, device: str = "cluster"
         crop=crop,
         crop_name=crop_cfg.get("crop_name", crop),
         target=target,
+        view=view,
         repo_root=repo_root,
         crop_dir=crop_dir,
-        run_dir=crop_dir / "runs_optim" / target,
-        exp_name=tcfg["exp_name"],
+        run_dir=crop_dir / "runs_optim" / vcfg["run_subdir"] / view,
+        exp_name=vcfg["exp_name"],
         project_src=project_src,
         inputs=inputs,
-        parameters=tcfg.get("parameters") or {},
-        subset=tcfg.get("subset") or {},
+        subset=vcfg.get("subset") or {},
         mount_data=cfg["climate"]["mount_data"],
         slurm=cfg["slurm"],
         device=device,
         dm_fraction=float(crop_cfg.get("dm_fraction", 1.0)),
     )
+
+
+def load_spec(config_path: Path, crop: str, target: str, view: str | None = None,
+              device: str = "cluster") -> RunSpec:
+    """One run, straight from a config file. ``view`` defaults to the first one."""
+    cfg = yaml.safe_load(Path(config_path).read_text())
+    views = target_views(cfg, crop, target)
+    if view is None:
+        view = next(iter(views))
+    if view not in views:
+        raise SystemExit(f"target {target!r} has no view {view!r}; have {sorted(views)}")
+    return make_run(cfg, crop, target, view, views[view], device=device)
 
 
 # ---------------------------------------------------------------------------
@@ -459,22 +498,40 @@ def discover_runs(crop_dir: Path) -> dict[str, Path]:
     """Every output directory that holds results for a crop.
 
     Returns ``{label: out_dir}`` — scenario runs keep their experiment id
-    (``DWD__S1``), calibration runs are prefixed (``optim:phenology``).
+    (``DWD__S1``), calibration runs are prefixed (``optim:calib_growth/lai``).
+    A calibration stage keeps one run dir per view, so ``runs_optim`` is searched
+    one level deeper than ``runs``.
     """
     found: dict[str, Path] = {}
-    for base, prefix in ((crop_dir / "runs", ""), (crop_dir / "runs_optim", "optim:")):
-        if not base.is_dir():
+
+    def collect(run: Path, label: str) -> bool:
+        out_root = run / "out"
+        if not out_root.is_dir():
+            return False
+        hit = False
+        for exp in sorted(out_root.iterdir()):
+            if exp.is_dir() and (any(exp.glob("yearly/*.csv")) or any(exp.glob("daily/*.csv"))):
+                found[label] = exp
+                hit = True
+        return hit
+
+    for run in sorted((crop_dir / "runs").iterdir()) if (crop_dir / "runs").is_dir() else []:
+        if run.is_dir():
+            collect(run, run.name)
+            # A scenario run is labelled by its experiment id, not its dir name.
+            for exp in sorted((run / "out").iterdir()) if (run / "out").is_dir() else []:
+                if exp.is_dir() and (any(exp.glob("yearly/*.csv")) or any(exp.glob("daily/*.csv"))):
+                    found.pop(run.name, None)
+                    found[exp.name] = exp
+
+    base = crop_dir / "runs_optim"
+    for run in sorted(base.iterdir()) if base.is_dir() else []:
+        if not run.is_dir():
             continue
-        for run in sorted(base.iterdir()):
-            out_root = run / "out"
-            if not run.is_dir() or not out_root.is_dir():
-                continue
-            for exp in sorted(out_root.iterdir()):
-                if not exp.is_dir():
-                    continue
-                if any(exp.glob("yearly/*.csv")) or any(exp.glob("daily/*.csv")):
-                    label = f"{prefix}{run.name}" if prefix else exp.name
-                    found[label] = exp
+        if not collect(run, f"optim:{run.name}"):
+            for view in sorted(run.iterdir()):
+                if view.is_dir():
+                    collect(view, f"optim:{run.name}/{view.name}")
     return found
 
 

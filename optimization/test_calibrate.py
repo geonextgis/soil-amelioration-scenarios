@@ -13,6 +13,7 @@ with nothing installed.
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 import shutil
 import sys
@@ -32,6 +33,8 @@ import common  # noqa: E402
 
 CONFIG = OPTIM_DIR / "calibration.yaml"
 CROPS = ["winter_wheat", "winter_rapeseed", "spring_barley", "potato", "maize"]
+#: the two calibration stages, in order
+TARGETS = ["phenology", "growth"]
 
 _results: list[tuple[str, str, str]] = []
 
@@ -92,7 +95,7 @@ print("\nconfig + space")
 @test("calibration.yaml extends config.yaml")
 def _():
     cfg = cc.load_calib_config(CONFIG)
-    assert sorted(cfg["targets"]) == ["lai", "phenology", "yield"]
+    assert sorted(cfg["targets"]) == ["growth", "phenology"]
     assert set(cfg["crops"]) == set(CROPS), "crops must come from the base config"
     assert "singularity_image" in cfg["slurm"]
     assert "input_profiles" in cfg
@@ -113,21 +116,66 @@ def _():
     assert not (OPTIM_DIR / "studies").exists(), "Optuna study dir should be gone"
 
 
-@test("the three losses survived the removal and are importable")
+@test("one loss per view, and an evaluator for each of them")
 def _():
+    import evaluation
     import objectives
-    assert sorted(objectives.TARGETS) == ["lai", "phenology", "yield"]
-    for target in objectives.TARGETS:
-        process_result, loss_fn = cc.objective_for(target)
+    assert sorted(objectives.VIEWS) == ["lai", "phenology", "yield"]
+    for view in objectives.VIEWS:
+        process_result, loss_fn = objectives.for_view(view)
         assert callable(process_result) and callable(loss_fn)
+        assert view in evaluation.EVALUATORS, f"{view} has a loss but no evaluator"
     # The DVS bins the LAI diagnostics key off must still be the ones the loss uses.
     assert objectives.DVS_BINS == [0.0, 0.25, 0.5, 1.0, 1.25, 1.50, 1.75, 2.0]
+
+
+@test("every view of every stage is both simulated and scored")
+def _():
+    # A view with no weight would be simulated and silently ignored; a weight with
+    # no view would score something that was never run. Both are refused at load.
+    for target in TARGETS:
+        spec = cc.load_spec(CONFIG, "winter_wheat", target)
+        assert set(spec.components) == set(spec.views), (spec.views, spec.components)
+        for view, cfg in spec.components.items():
+            assert float(cfg["weight"]) > 0 and float(cfg["scale"]) > 0, (view, cfg)
+
+
+@test("the joint objective is a weighted mean of the scaled component losses")
+def _():
+    import objectives
+    components = {"lai": {"weight": 0.5, "scale": 0.15},
+                  "yield": {"weight": 0.5, "scale": 0.5}}
+
+    # Both components exactly at their scale -> 1.0, whatever their units.
+    objective, breakdown = objectives.combine(components, {"lai": 0.15, "yield": 0.5})
+    assert abs(objective - 1.0) < 1e-12, objective
+    assert breakdown["lai"]["scaled"] == 1.0 and breakdown["yield"]["scaled"] == 1.0
+
+    # Halving one component moves the objective by its weighted share and nothing
+    # else — this is what stops one view being traded away silently.
+    better_lai, _ = objectives.combine(components, {"lai": 0.075, "yield": 0.5})
+    assert abs(better_lai - 0.75) < 1e-12, better_lai
+    better_yield, _ = objectives.combine(components, {"lai": 0.15, "yield": 0.25})
+    assert abs(better_yield - 0.75) < 1e-12, better_yield
+
+    # A single-component stage with scale 1.0 reproduces the raw loss, so the
+    # phenology objective stays an RMSE in days.
+    single, _ = objectives.combine({"phenology": {"weight": 1.0, "scale": 1.0}},
+                                   {"phenology": 6.4})
+    assert single == 6.4
+
+    # A missing component is an error, never a silently smaller objective.
+    try:
+        objectives.combine(components, {"lai": 0.2})
+    except SystemExit:
+        return
+    raise AssertionError("a component with no loss must not be scored")
 
 
 @test("space resolves for every crop and target")
 def _():
     for crop in CROPS:
-        for target in ("phenology", "lai", "yield"):
+        for target in TARGETS:
             spec = cc.load_spec(CONFIG, crop, target)
             names = list(spec.space.get("single_value_params") or {}) + \
                 list(spec.space.get("multi_value_params") or {})
@@ -142,7 +190,7 @@ def _():
     # would silently truncate or overrun them.
     lengths = {}
     for crop in CROPS:
-        spec = cc.load_spec(CONFIG, crop, "lai")
+        spec = cc.load_spec(CONFIG, crop, "growth")
         xml = spec.run.crop_dir / "data" / "crop" / "crop.xml"
         actual = cc.read_param(cc.crop_root(xml), spec.crop_name, "SLATableSLA")
         resolved = spec.space["multi_value_params"]["SLATableSLA"]["values"]
@@ -160,7 +208,7 @@ def _():
     # question about whether the declared bounds admit the shipped values.
     cfg = cc.load_calib_config(CONFIG)
     for crop in CROPS:
-        for target in ("phenology", "lai", "yield"):
+        for target in TARGETS:
             spec = cc.load_spec(CONFIG, crop, target)
             xml = spec.run.crop_dir / "data" / "crop" / "crop.xml"
             tcfg = cfg["targets"][target]
@@ -181,36 +229,62 @@ def _():
     import inspect
     source = inspect.getsource(cc.stage)
     assert "ledger_path.exists()" in source, "stage() must check for an empty ledger"
-    assert "provenance.json" in source, "the yield handoff must be exempt from the reset"
+    assert "provenance.json" in source, "the stage-1 handoff must be exempt from the reset"
     assert "rebuild" in source
 
 
-@test("frozen set covers phenology; yield additionally freezes the LAI set")
+@test("the growth stage freezes the whole stage-1 result and the table grids")
 def _():
-    lai = cc.load_spec(CONFIG, "winter_wheat", "lai")
-    yld = cc.load_spec(CONFIG, "winter_wheat", "yield")
+    phen = cc.load_spec(CONFIG, "winter_wheat", "phenology")
+    growth = cc.load_spec(CONFIG, "winter_wheat", "growth")
+
+    movable = set(phen.space.get("single_value_params") or {}) | \
+        set(phen.space.get("multi_value_params") or {})
+    # Everything stage 1 can move must be frozen in stage 2, or the joint
+    # calibration could quietly re-time development and invalidate stage 1.
+    assert movable <= set(growth.frozen), f"not frozen in growth: {movable - set(growth.frozen)}"
     for pid in ("TSUM1", "TSUM2", "TEFFMX", "SLATableDVS", "RUETableDVS"):
-        assert pid in lai.frozen and pid in yld.frozen, f"{pid} not frozen"
-    for pid in ("RGRLAI", "SLATableSLA", "LAICR", "DVSDLT"):
-        assert pid in yld.frozen, f"{pid} must be frozen during yield calibration"
-        assert pid not in lai.frozen, f"{pid} must be calibratable during LAI calibration"
-    # `frozen_exclude` un-freezes a parameter the yield target needs as a
-    # structural counterweight. Whether any is needed depends on which partitioning
-    # parameters are declared, so assert the consistency rather than a fixed name:
-    # excusing something that is not in the space is a silently dead config line.
+        assert pid in growth.frozen, f"{pid} not frozen"
+    # The DVS grids are frozen in both stages: moving one would re-index every
+    # response table and break the bin-to-element mapping the agents reason with.
+    for pid in ("SLATableDVS", "RUETableDVS"):
+        assert pid in phen.frozen, f"{pid} must stay frozen while calibrating phenology"
+
+    # `frozen_exclude` un-freezes a parameter a stage needs as a structural
+    # counterweight. Excusing something that is not in the space is a silently dead
+    # config line, so assert the consistency rather than a fixed name.
     cfg = cc.load_calib_config(CONFIG)
-    excluded = set(cfg["targets"]["yield"].get("frozen_exclude") or [])
-    space = set(yld.space.get("single_value_params") or {}) | \
-        set(yld.space.get("multi_value_params") or {})
-    assert excluded <= space, f"frozen_exclude names parameters not in the space: {excluded - space}"
-    for pid in excluded:
-        assert pid not in yld.frozen, f"{pid} is excused but still frozen"
+    for target in TARGETS:
+        spec = cc.load_spec(CONFIG, "winter_wheat", target)
+        excluded = set(cfg["targets"][target].get("frozen_exclude") or [])
+        space = set(spec.space.get("single_value_params") or {}) | \
+            set(spec.space.get("multi_value_params") or {})
+        assert excluded <= space, f"{target}: frozen_exclude names {excluded - space}"
+        for pid in excluded:
+            assert pid not in spec.frozen, f"{pid} is excused but still frozen"
+
+
+@test("LAI and yield parameters live in ONE stage, so neither can undo the other")
+def _():
+    # The point of the restructure: a parameter that moves biomass and leaf area
+    # (RUE, KDIF, partitioning) must be calibratable while both are being scored.
+    growth = cc.load_spec(CONFIG, "winter_wheat", "growth")
+    space = set(growth.space.get("single_value_params") or {}) | \
+        set(growth.space.get("multi_value_params") or {})
+    canopy = {"RGRLAI", "TDWI", "SLATableSLA", "LAICR", "DVSDLT"}
+    yielding = {"FRTDM", "NMAXSO", "TCNT", "DVSNT", "DVSNLT"}
+    shared = {"RUETableRUE", "KDIFTableK", "StorageOrgansPartitioningTableFraction"}
+    for group, label in ((canopy, "canopy"), (yielding, "yield"), (shared, "shared")):
+        missing = group - space
+        assert not missing, f"{label} parameters missing from the joint space: {missing}"
+    assert set(growth.views) == {"lai", "yield"}, growth.views
+    assert not (space & set(growth.frozen))
 
 
 @test("no parameter is both frozen and calibratable")
 def _():
     for crop in CROPS:
-        for target in ("phenology", "lai", "yield"):
+        for target in TARGETS:
             spec = cc.load_spec(CONFIG, crop, target)
             names = set(spec.space.get("single_value_params") or {}) | \
                 set(spec.space.get("multi_value_params") or {})
@@ -224,7 +298,7 @@ print("\nproposal normalisation")
 
 @test("index-keyed table edit changes only that element")
 def _():
-    spec = cc.load_spec(CONFIG, "winter_wheat", "lai")
+    spec = cc.load_spec(CONFIG, "winter_wheat", "growth")
     xml = spec.run.crop_dir / "data" / "crop" / "crop.xml"
     current = cc.current_values(xml, spec.crop_name, spec.space)
     out = cc.normalise_proposal({"SLATableSLA": {"3": 0.0118}}, current, spec.space)
@@ -238,7 +312,7 @@ def _():
 
 @test("unknown, frozen and wrong-shaped parameters are refused")
 def _():
-    spec = cc.load_spec(CONFIG, "winter_wheat", "lai")
+    spec = cc.load_spec(CONFIG, "winter_wheat", "growth")
     xml = spec.run.crop_dir / "data" / "crop" / "crop.xml"
     current = cc.current_values(xml, spec.crop_name, spec.space)
     for raw in ({"NOT_A_PARAM": 1},
@@ -259,21 +333,21 @@ print("\nconstraints")
 
 @test("a well-formed single-node change passes")
 def _():
-    spec = cc.load_spec(CONFIG, "winter_wheat", "lai")
+    spec = cc.load_spec(CONFIG, "winter_wheat", "growth")
     violations, _ = proposal_check(spec, {"SLATableSLA": {"3": 0.0135}})
     assert not violations, [v.message for v in violations]
 
 
 @test("out-of-bounds is caught")
 def _():
-    spec = cc.load_spec(CONFIG, "winter_wheat", "lai")
+    spec = cc.load_spec(CONFIG, "winter_wheat", "growth")
     _, ids = proposal_check(spec, {"RGRLAI": 0.5})
     assert "bounds" in ids
 
 
 @test("step-size limit is enforced")
 def _():
-    spec = cc.load_spec(CONFIG, "winter_wheat", "lai")
+    spec = cc.load_spec(CONFIG, "winter_wheat", "growth")
     _, ids = proposal_check(spec, {"RGRLAI": 0.035})       # +85%
     assert "bounded_step_size" in ids
     violations, _ = proposal_check(spec, {"RGRLAI": 0.0227})  # +20%
@@ -282,7 +356,7 @@ def _():
 
 @test("blast radius is limited to 3 parameters")
 def _():
-    spec = cc.load_spec(CONFIG, "winter_wheat", "lai")
+    spec = cc.load_spec(CONFIG, "winter_wheat", "growth")
     _, ids = proposal_check(spec, {"RGRLAI": 0.0208, "TDWI": 23.0,
                                    "LAICR": 3.4, "RDRSHM": 0.022})
     assert "small_steps" in ids
@@ -292,7 +366,7 @@ def _():
 def _():
     # Values chosen to sit inside the bounds and inside the step limit, so it is
     # the shape rule under test and not one of the cheaper guards.
-    spec = cc.load_spec(CONFIG, "winter_wheat", "lai")
+    spec = cc.load_spec(CONFIG, "winter_wheat", "growth")
     _, ids = proposal_check(spec, {"SLATableSLA": {"1": 0.0178}})   # 1.91x above node 0
     assert "sla_profile_smooth" in ids, ids
     _, ids = proposal_check(spec, {"SLATableSLA": {"7": 0.0135}})   # above the profile max
@@ -301,14 +375,14 @@ def _():
 
 @test("leaf death rate must not fall as temperature rises")
 def _():
-    spec = cc.load_spec(CONFIG, "winter_wheat", "lai")
+    spec = cc.load_spec(CONFIG, "winter_wheat", "growth")
     _, ids = proposal_check(spec, {"RDRLeavesTableRelativeRate": {"3": 0.0070}})
     assert "leaf_rdr_non_decreasing_with_temp" in ids
 
 
 @test("above-ground partitioning must stay closed at 1")
 def _():
-    spec = cc.load_spec(CONFIG, "winter_wheat", "lai")
+    spec = cc.load_spec(CONFIG, "winter_wheat", "growth")
     _, ids = proposal_check(spec, {"LeavesPartitioningTableFraction": {"0": 0.72}})
     assert "above_ground_partitioning_sums_to_one" in ids
     # ...and passes when the stem fraction takes the difference.
@@ -321,7 +395,7 @@ def _():
 def _():
     # spring_barley's three tables sit on different DVS grids, so the union-grid
     # sum is not 1 everywhere even before any change. That must not be reported.
-    spec = cc.load_spec(CONFIG, "spring_barley", "lai")
+    spec = cc.load_spec(CONFIG, "spring_barley", "growth")
     violations, ids = proposal_check(spec, {})
     assert "above_ground_partitioning_sums_to_one" not in ids, [v.message for v in violations]
 
@@ -331,14 +405,14 @@ def _():
     # RUETableDVS is [0, 1, 1.3, 2]; the rule looks at the nodes from DVS 1.0 on.
     # Node 2 (DVS 1.3) raised above node 1 (DVS 1.0) is the violation, and it sits
     # inside both the bounds and the step limit.
-    spec = cc.load_spec(CONFIG, "winter_wheat", "yield")
+    spec = cc.load_spec(CONFIG, "winter_wheat", "growth")
     require_params(spec, "RUETableRUE")
     _, ids = proposal_check(spec, {"RUETableRUE": {"2": 4.2}})     # 3.5 -> 4.2, above 3.8
     assert "rue_declines_after_anthesis" in ids, ids
     _, ids = proposal_check(spec, {"RUETableRUE": {"2": 3.2}})     # a legitimate decrease
     assert "rue_declines_after_anthesis" not in ids, ids
 
-    spec = cc.load_spec(CONFIG, "winter_rapeseed", "yield")
+    spec = cc.load_spec(CONFIG, "winter_rapeseed", "growth")
     require_params(spec, "StorageOrgansPartitioningTableFraction")
     _, ids = proposal_check(spec, {"StorageOrgansPartitioningTableFraction": {"8": 0.4}})
     assert "storage_organ_non_decreasing" in ids, ids
@@ -346,7 +420,7 @@ def _():
 
 @test("N threshold ordering is enforced")
 def _():
-    spec = cc.load_spec(CONFIG, "winter_wheat", "yield")
+    spec = cc.load_spec(CONFIG, "winter_wheat", "growth")
     require_params(spec, "DVSNT", "DVSNLT")
     _, ids = proposal_check(spec, {"DVSNT": 1.15})   # DVSNLT is 1.3 -> ok
     assert "n_thresholds_ordered" not in ids
@@ -362,7 +436,7 @@ print("\nfrozen phenology guard")
 
 @test("guard passes a legitimate change and catches a phenology tamper")
 def _():
-    spec = cc.load_spec(CONFIG, "winter_wheat", "lai")
+    spec = cc.load_spec(CONFIG, "winter_wheat", "growth")
     source = spec.run.crop_dir / "data" / "crop" / "crop.xml"
     with tempfile.TemporaryDirectory() as tmp:
         xml = Path(tmp) / "crop.xml"
@@ -381,7 +455,7 @@ def _():
 
 @test("guard catches a moved response-table DVS grid")
 def _():
-    spec = cc.load_spec(CONFIG, "winter_wheat", "lai")
+    spec = cc.load_spec(CONFIG, "winter_wheat", "growth")
     source = spec.run.crop_dir / "data" / "crop" / "crop.xml"
     with tempfile.TemporaryDirectory() as tmp:
         xml = Path(tmp) / "crop.xml"
@@ -400,7 +474,11 @@ print("\nledger")
 
 @test("ledger appends, never overwrites, and reports best + stopping")
 def _():
-    spec = cc.load_spec(CONFIG, "winter_wheat", "lai")
+    spec = cc.load_spec(CONFIG, "winter_wheat", "growth")
+    # Well above the configured target, or the objectives below would satisfy the
+    # stage's target_objective and stop it for the wrong reason. The rules are a
+    # tuning knob; the invariant under test is the bookkeeping.
+    unit = 3.0 * float(spec.stopping["target_objective"])
     with tempfile.TemporaryDirectory() as tmp:
         original = cc.LEDGER_ROOT
         cc.LEDGER_ROOT = Path(tmp)
@@ -408,7 +486,7 @@ def _():
             assert cc.next_iteration(spec) == 0
             for i, objective in enumerate([1.0, 0.8, 0.9, 0.85]):
                 cc.append_ledger(spec, {"iteration": i, "status": "completed",
-                                        "objective": objective,
+                                        "objective": objective * unit,
                                         "parameters_changed": {"RGRLAI": 0.02}})
             records = cc.read_ledger(spec)
             assert [r["iteration"] for r in records] == [0, 1, 2, 3]
@@ -417,9 +495,9 @@ def _():
 
             stop = cc.stop_check(spec)
             assert stop["n_completed"] == 4
-            assert stop["best_objective"] == 0.8
+            assert stop["best_objective"] == 0.8 * unit
             assert stop["since_improvement"] == 2, stop
-            assert stop["stop"] is False
+            assert stop["stop"] is False, stop
 
             # Flat iterations up to the configured patience must not stop it; one
             # past it must. Read the value rather than hard-coding it — the
@@ -429,7 +507,7 @@ def _():
             n = 4
             for _ in range(patience - stop["since_improvement"]):
                 cc.append_ledger(spec, {"iteration": n, "status": "completed",
-                                        "objective": 0.95, "parameters_changed": {}})
+                                        "objective": 0.95 * unit, "parameters_changed": {}})
                 n += 1
             stop = cc.stop_check(spec)
             assert stop["since_improvement"] == patience, stop
@@ -440,7 +518,7 @@ def _():
 
 @test("a failed iteration keeps its slot and is excluded from best")
 def _():
-    spec = cc.load_spec(CONFIG, "winter_wheat", "lai")
+    spec = cc.load_spec(CONFIG, "winter_wheat", "growth")
     with tempfile.TemporaryDirectory() as tmp:
         original = cc.LEDGER_ROOT
         cc.LEDGER_ROOT = Path(tmp)
@@ -557,23 +635,62 @@ def _():
 print("\nisolation")
 
 
-@test("each target gets its own isolated run dir")
+@test("every view of every stage gets its own isolated run dir")
 def _():
     seen = {}
     for crop in CROPS:
-        for target in ("phenology", "lai", "yield"):
-            run_dir = cc.load_spec(CONFIG, crop, target).run.run_dir
-            assert run_dir.name.startswith("calib_"), run_dir
-            assert run_dir not in seen, f"{crop}/{target} collides with {seen.get(run_dir)}"
-            seen[run_dir] = f"{crop}/{target}"
+        for target in TARGETS:
+            spec = cc.load_spec(CONFIG, crop, target)
+            for view, run in spec.runs.items():
+                assert run.run_dir.name == view, run.run_dir
+                assert run.run_dir.parent.name.startswith("calib_"), run.run_dir
+                assert run.run_dir not in seen, \
+                    f"{crop}/{target}/{view} collides with {seen.get(run.run_dir)}"
+                seen[run.run_dir] = f"{crop}/{target}/{view}"
+            # Two views of one stage must not share an output namespace either —
+            # they write per-location files into out/<exp_name>/ and would clobber
+            # each other's results.
+            names = [run.exp_name for run in spec.runs.values()]
+            assert len(set(names)) == len(names), names
+
+
+@test("the views of a stage are driven from one crop.xml")
+def _():
+    # If the yield view kept its own parameter file, the two components of the
+    # objective would describe different crops and the joint calibration would be
+    # meaningless.
+    spec = cc.load_spec(CONFIG, "winter_wheat", "growth")
+    assert len(spec.views) == 2
+    assert spec.crop_xml == spec.runs[spec.views[0]].crop_xml
+    assert spec.runs["lai"].crop_xml != spec.runs["yield"].crop_xml, \
+        "each run dir has its own file on disk; sync_crop_xml is what keeps them equal"
+
+    source = spec.run.crop_dir / "data" / "crop" / "crop.xml"
+    with tempfile.TemporaryDirectory() as tmp:
+        runs = {}
+        for view in spec.views:
+            xml = Path(tmp) / view / "data" / "crop" / "crop.xml"
+            xml.parent.mkdir(parents=True)
+            shutil.copyfile(source, xml)
+            runs[view] = dataclasses.replace(spec.runs[view], run_dir=Path(tmp) / view)
+        spec.runs = runs
+        common.apply_parameters(spec.crop_xml, spec.crop_name, {"RGRLAI": 0.0211})
+        mirrored = cc.sync_crop_xml(spec)
+        assert [str(p) for p in mirrored] == [str(spec.runs["yield"].crop_xml)]
+        for view in spec.views:
+            value = cc.read_param(cc.crop_root(spec.runs[view].crop_xml),
+                                  spec.crop_name, "RGRLAI")
+            assert value == 0.0211, f"{view} did not receive the proposal: {value}"
 
 
 @test("nothing in the workflow writes to the production crop.xml")
 def _():
-    spec = cc.load_spec(CONFIG, "winter_wheat", "lai")
-    production = spec.run.crop_dir / "data" / "crop" / "crop.xml"
-    assert spec.crop_xml != production
-    assert "runs_optim" in str(spec.crop_xml)
+    for target in TARGETS:
+        spec = cc.load_spec(CONFIG, "winter_wheat", target)
+        production = spec.run.crop_dir / "data" / "crop" / "crop.xml"
+        for run in spec.runs.values():
+            assert run.crop_xml != production
+            assert "runs_optim" in str(run.crop_xml)
 
 
 # ---------------------------------------------------------------------------
@@ -616,20 +733,19 @@ def _():
         return names
 
     # Off: gone from the space. On: back, with no other parameter disturbed.
-    on = space_for("lai", lambda p: None)
-    off = space_for("lai", lambda p: p["RGRLAI"].__setitem__("enabled", False))
+    on = space_for("growth", lambda p: None)
+    off = space_for("growth", lambda p: p["RGRLAI"].__setitem__("enabled", False))
     assert "RGRLAI" in on and "RGRLAI" not in off
     assert on - {"RGRLAI"} == off, "disabling one parameter changed the others"
 
     # And the reverse, on a parameter that ships disabled.
-    off_y = space_for("yield", lambda p: None)
-    on_y = space_for("yield", lambda p: p["YieldAdjustRatio"].__setitem__("enabled", True))
-    assert "YieldAdjustRatio" not in off_y and "YieldAdjustRatio" in on_y
+    on_y = space_for("growth", lambda p: p["YieldAdjustRatio"].__setitem__("enabled", True))
+    assert "YieldAdjustRatio" not in on and "YieldAdjustRatio" in on_y
 
 
 @test("a disabled parameter leaves the space and cannot be proposed")
 def _():
-    spec = cc.load_spec(CONFIG, "winter_wheat", "yield")
+    spec = cc.load_spec(CONFIG, "winter_wheat", "growth")
     names = set(spec.space.get("single_value_params") or {}) | \
         set(spec.space.get("multi_value_params") or {})
     for pid in ("YieldAdjustRatio", "FreshratioStorageOrgan"):
@@ -652,7 +768,7 @@ def _():
 def _():
     values = {}
     for crop in CROPS:
-        spec = cc.load_spec(CONFIG, crop, "yield")
+        spec = cc.load_spec(CONFIG, crop, "growth")
         assert "FRTDM" in (spec.space.get("single_value_params") or {}), crop
         row = next(r for r in cc.describe_space(spec) if r["parameter"] == "FRTDM")
         assert row["movable"], f"{crop}: FRTDM resolved immovable"
@@ -725,32 +841,44 @@ def _():
 
 
 # ---------------------------------------------------------------------------
-print("\nphenology target")
+print("\nstage 1: phenology")
 
 
-@test("phenology is protected and its space is the thermal-time set")
+@test("phenology is a single-view stage over the thermal-time set")
 def _():
     spec = cc.load_spec(CONFIG, "winter_wheat", "phenology")
-    assert spec.protected, "the phenology target must be protected"
+    assert spec.views == ["phenology"], spec.views
     names = set(spec.space.get("single_value_params") or {}) | \
         set(spec.space.get("multi_value_params") or {})
     for pid in ("TSUM1", "TSUM2", "TSUMEM", "TBASEM", "TEFFMX"):
-        assert pid in names, f"{pid} must be calibratable when recalibrating phenology"
-    # Nothing is frozen here — the protection is the gate, not a freeze — but the
-    # values must still be recoverable, which is what optimized_baseline.json is for.
-    assert spec.frozen == []
-    assert spec.protected_path.name == "optimized_baseline.json"
+        assert pid in names, f"{pid} must be calibratable in stage 1"
+    # Calibrated from scratch: the objective is the raw RMSE in days, so the
+    # stopping target stays readable as a number of days.
+    assert spec.components == {"phenology": {"weight": 1.0, "scale": 1.0}}, spec.components
+    assert spec.objective_name == "phenology_rmse_days"
 
 
-@test("phenology parameters frozen elsewhere are exactly the ones this target moves")
+@test("the thermal-time parameters are calibrated from scratch, not anchored on crop.xml")
 def _():
-    phen = cc.load_spec(CONFIG, "winter_wheat", "phenology")
-    lai = cc.load_spec(CONFIG, "winter_wheat", "lai")
-    movable = set(phen.space.get("single_value_params") or {}) | \
-        set(phen.space.get("multi_value_params") or {})
-    # Everything the phenology agent can move must be frozen during LAI calibration,
-    # or the freeze would not actually protect the optimized set.
-    assert movable <= set(lai.frozen), f"not frozen during LAI: {movable - set(lai.frozen)}"
+    # Relative bounds around the shipped values would make stage 1 a refinement of
+    # whatever is already in the file. The bounds that matter here are absolute and
+    # physiological, so the same declaration works for a crop that has never been
+    # calibrated.
+    import yaml
+    cfg = yaml.safe_load(CONFIG.read_text())
+    params = cfg["targets"]["phenology"]["parameters"]
+    for pid in ("TSUM1", "TSUM2", "TSUMEM", "TBASEM", "TEFFMX"):
+        assert params[pid]["mode"] == "absolute", f"{pid} is anchored on the current value"
+
+    widths = {}
+    for crop in CROPS:
+        spec = cc.load_spec(CONFIG, crop, "phenology")
+        row = next(r for r in cc.describe_space(spec) if r["parameter"] == "TSUM1")
+        low, high = row["bounds"]
+        assert low <= row["value"] <= high, f"{crop}: {row['value']} outside {row['bounds']}"
+        widths[crop] = (low, high)
+    # Absolute bounds mean every crop searches the same physiological range.
+    assert len(set(widths.values())) == 1, widths
 
 
 @test("phenology constraints catch an inverted temperature pair")
@@ -924,6 +1052,102 @@ def _():
         server.server_close()
 
 
+@test("reasoning models: thinking is disabled and its failures are named")
+def _():
+    """qwen3.6 and friends return a separate `thinking` field and will spend the
+    whole generation budget on it, leaving `content` empty or truncated. The two
+    resulting errors used to surface as 'no JSON object in the reply', which names
+    neither the cause nor the fix."""
+    import http.server
+    import threading
+    from agents import llm
+
+    sent, scenario = {}, {"mode": "ok"}
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *_):
+            pass
+
+        def _send(self, payload):
+            body = json.dumps(payload).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_POST(self):
+            sent.update(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+            mode = scenario["mode"]
+            if mode == "ok":
+                self._send({"message": {"content": '{"parameter_changes": {"RGRLAI": 0.02}}'},
+                            "done_reason": "stop"})
+            elif mode == "empty_thinking":
+                self._send({"message": {"content": "", "thinking": "Let me consider " * 40},
+                            "done_reason": "stop"})
+            elif mode == "json_in_thinking":
+                self._send({"message": {"content": "",
+                                        "thinking": 'so: {"parameter_changes": {"TDWI": 19.0}}'},
+                            "done_reason": "stop"})
+            elif mode == "truncated":
+                self._send({"message": {"content": '{"analysis": "the diagnostics sh'},
+                            "done_reason": "length", "eval_count": 2048})
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        host = f"http://127.0.0.1:{server.server_address[1]}"
+        backend = llm.OllamaBackend(model="qwen3.6:35b-a3b", host=host, timeout=20)
+
+        # Thinking must be switched off in the request, and a budget reserved.
+        assert backend.json_chat([{"role": "user", "content": "x"}])["parameter_changes"]
+        assert sent["think"] is False, sent
+        assert sent["options"]["num_predict"] > 0
+        assert sent["options"]["num_ctx"] >= 32768
+
+        # All thinking, no answer -> the error must name think and num_ctx.
+        scenario["mode"] = "empty_thinking"
+        try:
+            backend.json_chat([{"role": "user", "content": "x"}])
+            raise AssertionError("should have refused")
+        except llm.LLMError as exc:
+            assert "think" in str(exc) and "num_ctx" in str(exc), exc
+
+        # If the JSON is in the thinking text after all, use it rather than fail.
+        scenario["mode"] = "json_in_thinking"
+        assert backend.json_chat([{"role": "user", "content": "x"}]) \
+            ["parameter_changes"]["TDWI"] == 19.0
+
+        # Cut off mid-JSON -> say so, instead of "no JSON object".
+        scenario["mode"] = "truncated"
+        try:
+            backend.json_chat([{"role": "user", "content": "x"}])
+            raise AssertionError("should have refused")
+        except llm.LLMError as exc:
+            assert "cut off" in str(exc) and "num_ctx" in str(exc), exc
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+@test("the history section stays bounded as the ledger grows")
+def _():
+    from agents.base import render_history
+    records = [{"iteration": i, "objective": 1.5 - i * 0.01, "status": "completed",
+                "improved": i % 3 == 0, "parameters_changed": {"RUETableRUE": [1, 2]},
+                "reason": "a reason long enough to matter " * 4,
+                "expected_effect": "an expectation " * 6}
+               for i in range(80)]
+    full = render_history(records, max_full=12)
+    # The recent window is verbatim; everything older is one line each.
+    assert "Most recent 12 iterations in full" in full
+    assert "iter  79" not in full.split("Most recent")[0], "the tail must be in full"
+    assert "iter   0" in full, "older iterations must still be listed, briefly"
+    # Bounded: 80 iterations must not cost much more than 20 do.
+    small = render_history(records[:20], max_full=12)
+    assert len(full) < len(small) * 2.0, (len(small), len(full))
+
+
 @test("an unreachable server is an error, never a silent fallback")
 def _():
     from agents import llm
@@ -943,38 +1167,43 @@ print("\nagent loop")
 
 
 def _stub_agent(replies, *, valid=True, violations=()):
-    """An LAI agent whose calibrate.py calls are replaced by canned answers.
+    """A growth agent whose calibrate.py calls are replaced by canned answers.
 
     Exercises the agent's own logic — context building, reply parsing, the repair
     round-trip, what reaches the ledger — without a model server or a cluster.
     """
     import agents as ag
 
-    spec = cc.load_spec(CONFIG, "winter_wheat", "lai")
+    spec = cc.load_spec(CONFIG, "winter_wheat", "growth")
     rows = cc.describe_space(spec)
     status = {
-        "crop": "winter_wheat", "target": "lai", "objective": "lai_rmse_dvs_binned",
-        "n_completed": 1, "next_iteration": 1, "project_rows": 300,
-        "project_locations": 150, "subset": {"n_locations": 150},
+        "crop": "winter_wheat", "target": "growth", "objective": "joint_lai_yield",
+        "views": spec.views, "objective_components": spec.components,
+        "scope": {view: {"rows": 400, "locations": 400, "subset": {"n_locations": 400}}
+                  for view in spec.views},
+        "n_completed": 1, "next_iteration": 1,
         "frozen": {"parameters": spec.frozen, "intact": True, "drift": []},
-        "best": {"iteration": 0, "objective": 0.78},
+        "best": {"iteration": 0, "objective": 2.71},
         "stopping": {"stop": False, "reason": "criteria not met", "n_completed": 1},
         "parameters": rows, "constraints": spec.constraints,
         "ledger_dir": "/tmp/ledger",
     }
     history = [{
-        "iteration": 0, "objective": 0.78, "status": "completed", "improved": True,
+        "iteration": 0, "objective": 2.71, "status": "completed", "improved": True,
         "parameters_changed": {}, "reason": "baseline",
-        "diagnostics": {"by_dvs_bin": [{"dvs_bin": "1.00-1.25 anthesis", "bias": -0.6}]},
+        "diagnostics": {
+            "objective": {"lai": {"loss": 0.56, "scaled": 3.76},
+                          "yield": {"loss": 0.84, "scaled": 1.67}},
+            "lai": {"by_dvs_bin": [{"dvs_bin": "1.00-1.25 anthesis", "bias": -0.6}]},
+            "yield": {"attribution": {"verdict": "biomass is plausible"}}},
     }]
 
-    agent = ag.LAIAgent("winter_wheat", ag.MockBackend(replies=list(replies)),
-                        config_path=CONFIG, verbose=False)
+    agent = ag.GrowthAgent("winter_wheat", ag.MockBackend(replies=list(replies)),
+                           config_path=CONFIG, verbose=False)
     executed = {}
     agent.status = lambda: status
     agent.history = lambda: history
-    agent.preflight = lambda params: {
-        "valid": valid, "violations": list(violations), "blocked_by_protection": False}
+    agent.preflight = lambda params: {"valid": valid, "violations": list(violations)}
     agent.execute = lambda decision: executed.update(decision=decision) or {"status": "ok"}
     return agent, executed
 
@@ -986,9 +1215,20 @@ def _():
     assert "RGRLAI" in context and "SLATableSLA" in context
     assert "bounds" in context
     assert "Maximum relative growth rate" in context, "the biological meaning must be present"
-    assert "iteration 0: objective 0.7800" in context
+    assert "iteration 0: objective 2.7100" in context
     assert "parameter_changes" in context, "the reply schema must be stated"
     assert "TSUM1" in context, "the frozen list must be visible so the model does not try"
+
+
+@test("the context of a joint stage names both components and both diagnostics")
+def _():
+    agent, _ = _stub_agent([])
+    context = agent.context(agent.status(), agent.history())
+    for view in ("lai", "yield"):
+        assert f"view {view}" in context, f"the {view} component must be described"
+    assert "weight 0.5" in context, "the model must see how the components are weighted"
+    assert "by_dvs_bin" in context and "attribution" in context, \
+        "both diagnostic blocks must reach the model"
 
 
 @test("a well-formed reply becomes a Decision and reaches execute")
@@ -1008,7 +1248,7 @@ def _():
     assert decision.parameters == {"SLATableSLA": {"3": 0.0135}}
     assert "anthesis bin" in decision.reason
     blob = agent._reasoning_blob(decision)
-    assert "ruled out RGRLAI" in blob and "lai agent" in blob
+    assert "ruled out RGRLAI" in blob and "growth agent" in blob
 
 
 @test("a rejected proposal is handed back with the violation and repaired")
@@ -1025,9 +1265,9 @@ def _():
     def preflight(params):
         calls["n"] += 1
         if calls["n"] == 1:
-            return {"valid": False, "blocked_by_protection": False, "violations": [
+            return {"valid": False, "violations": [
                 {"constraint": "bounds", "message": "SLATableSLA[3]=0.9 outside [0.006, 0.025]"}]}
-        return {"valid": True, "violations": [], "blocked_by_protection": False}
+        return {"valid": True, "violations": []}
 
     agent.preflight = preflight
     agent.iterate()
@@ -1046,6 +1286,60 @@ def _():
         assert "repair attempt" in str(exc)
         return
     raise AssertionError("an unrepairable proposal must not reach the model run")
+
+
+@test("a hoisted table index is re-nested under the named parameter")
+def _():
+    from agents.base import Decision
+    # What a local model actually produced: the index map at the top level, with
+    # the parameter name left behind in `parameter`.
+    d = Decision.from_reply({"parameter": "RUETableRUE",
+                             "parameter_changes": {"2": 3.1}, "reason": "x"})
+    assert d.parameters == {"RUETableRUE": {"2": 3.1}}, d.parameters
+    # The other two shorthands.
+    assert Decision.from_reply(
+        {"parameter": "RGRLAI", "value": 0.021}).parameters == {"RGRLAI": 0.021}
+    assert Decision.from_reply(
+        {"parameter": "RUETableRUE", "index": 2, "new_value": 3.1}
+    ).parameters == {"RUETableRUE": {"2": 3.1}}
+    # A well-formed proposal must be left exactly as it is.
+    good = {"parameter_changes": {"RUETableRUE": {"2": 3.1}}, "parameter": "RUETableRUE"}
+    assert Decision.from_reply(good).parameters == {"RUETableRUE": {"2": 3.1}}
+    # And a multi-parameter change must not be mangled by the re-nesting rule.
+    multi = {"parameter": "RGRLAI", "parameter_changes": {"RGRLAI": 0.02, "TDWI": 18.0}}
+    assert Decision.from_reply(multi).parameters == {"RGRLAI": 0.02, "TDWI": 18.0}
+
+
+@test("an unparseable proposal becomes a repairable verdict, not a crash")
+def _():
+    import agents as ag
+    # A real agent, so the real preflight() runs; only the subprocess is faked.
+    agent = ag.GrowthAgent("winter_wheat", ag.MockBackend(replies=[]),
+                        config_path=CONFIG, verbose=False)
+    agent._calibrate = lambda *a, **k: type(
+        "P", (), {"returncode": 1, "stdout": "",
+                  "stderr": "'2' is not a calibratable parameter for this target."})()
+    verdict = agent.preflight({"2": 3.1})
+    assert verdict["valid"] is False
+    assert "not a calibratable parameter" in verdict["violations"][0]["message"]
+
+    # A well-formed verdict on stdout must still be parsed normally.
+    agent._calibrate = lambda *a, **k: type(
+        "P", (), {"returncode": 0, "stderr": "",
+                  "stdout": 'note: staging\n{"valid": true, "violations": []}'})()
+    assert agent.preflight({"RGRLAI": 0.02})["valid"] is True
+
+
+@test("an unusable reply ends the session without losing the ledger")
+def _():
+    import agents as ag
+    bad = json.dumps({"parameter_changes": {"nonsense": 1.0}})
+    agent, executed = _stub_agent([bad] * 20, valid=False, violations=[
+        {"constraint": "bounds", "message": "still wrong"}])
+    summary = agent.loop(max_iterations=3)
+    assert "unusable model reply" in summary["stopped_because"], summary
+    assert summary["iterations_this_session"] == 0
+    assert not executed, "nothing may run once the proposal cannot be repaired"
 
 
 @test("iteration 0 is a baseline that changes nothing, with no model call")
@@ -1083,22 +1377,17 @@ def _():
     assert not executed, "stopping must not run the model"
 
 
-@test("the phenology agent will not propose anything in validation mode")
+@test("there is one agent per stage, and it targets that stage")
 def _():
     import agents as ag
-    agent = ag.PhenologyAgent("winter_wheat", ag.MockBackend(replies=[]),
-                              config_path=CONFIG, mode="validate", verbose=False)
-    assert agent.allow_recalibration is False
-    executed = {}
-    agent.status = lambda: {"next_iteration": 0, "crop": "winter_wheat", "target": "phenology"}
-    agent.execute = lambda d: executed.update(decision=d) or {"status": "ok"}
-    agent.iterate()
-    assert executed["decision"].parameters == {}, "validation must change nothing"
-    assert agent.backend.calls == [], "validation must not consult the model"
-
-    recal = ag.PhenologyAgent("winter_wheat", ag.MockBackend(replies=[]),
-                              config_path=CONFIG, mode="recalibrate", verbose=False)
-    assert recal.allow_recalibration is True
+    assert sorted(ag.AGENTS) == sorted(TARGETS)
+    for target, cls in ag.AGENTS.items():
+        agent = cls("winter_wheat", ag.MockBackend(replies=[]),
+                    config_path=CONFIG, verbose=False)
+        assert agent.target == target
+        # The scope handed to calibrate.py must name the stage, so an agent can
+        # never drive the other one's ledger.
+        assert "--target" in agent._scope() and target in agent._scope()
 
 
 @test("every agent has a prompt, and the prompts state their hard rules")
@@ -1106,9 +1395,9 @@ def _():
     import agents as ag
     from agents.base import PROMPT_DIR
     required = {
-        "lai.md": ["Peak timing is not yours to fix", "frozen"],
-        "yield.md": ["YieldAdjustRatio", "sum to one", "also move LAI"],
-        "phenology.md": ["already been optimized", "duration", "TSUM1"],
+        "growth.md": ["Peak timing", "sum to one", "expected_effect", "FRTDM",
+                      "both components"],
+        "phenology.md": ["from scratch", "duration", "TSUM1"],
         "analyst.md": ["do not propose", "thrashing"],
     }
     for name, phrases in required.items():
