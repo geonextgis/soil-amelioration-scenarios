@@ -100,6 +100,10 @@ post-anthesis RUE profile, then the nitrogen translocation parameters (`TCNT`,
   or RUE instead.
 - **Never repeat a change the ledger shows was already tried.** A change that made
   things worse is information: the mechanism or the sign is wrong.
+- **A rejected change has already been undone.** An iteration that did not beat the
+  best objective is rolled back to `best_crop.xml`, so `status` always shows you the
+  best parameter set and your proposal is a change to *that*. Do not undo or
+  compensate for a rejected change — it is not in the file.
 - **A second identical rejection means the mechanism is unreachable** through that
   parameter. Change mechanism or stop, and say what is blocking you.
 - **Step size proportional to the error.** A 20 % LAI deficit is a ~20 % SLA

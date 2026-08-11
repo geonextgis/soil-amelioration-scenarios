@@ -235,7 +235,8 @@ def render_history(records: list[dict], max_full: int = 12) -> str:
             objective = ("FAILED" if r.get("objective") is None
                          else f"{r['objective']:.4f}")
             changed = ", ".join(sorted(r.get("parameters_changed") or {})) or "baseline"
-            mark = "improved" if r.get("improved") else "no"
+            mark = ("improved" if r.get("improved")
+                    else "reverted" if r.get("accepted") is False else "kept")
             out.append(f"    iter {r['iteration']:>3}  {objective:>9}  {mark:>8}  {changed}")
         out.append("")
         out.append(f"  Most recent {len(records)} iterations in full:")
@@ -257,6 +258,15 @@ def render_history(records: list[dict], max_full: int = 12) -> str:
         outcome = ("improved" if r.get("improved") else
                    "new best but below the improvement threshold" if r.get("is_best") else
                    "did NOT improve")
+        # Whether the change is still in the file is what decides how to read the
+        # next proposal, so it is stated on every line rather than left implied.
+        if r.get("accepted") is False:
+            back = r.get("reverted_to_best") or {}
+            outcome += (f" — REJECTED and rolled back to the best set"
+                        + (f" (iteration {back['iteration']})" if back.get("iteration") is not None
+                           else ""))
+        elif r.get("accepted") is True and r.get("parameters_changed"):
+            outcome += " — kept"
         out.append(f"      outcome  {outcome}")
     return "\n".join(out)
 
@@ -402,6 +412,34 @@ class CalibrationAgent:
         return None, {}
 
     @staticmethod
+    def render_search(status: dict) -> list[str]:
+        """How a rejected change is treated — the model reasons from this.
+
+        Under ``acceptance: best`` the values in the parameter table are the best
+        set, *not* the set of the last iteration. Without saying so, a model that
+        sees "iteration 7 raised SLA and it did not help" in the history has no way
+        to know whether that raise is still in the file, and will either re-propose
+        it or compensate for a change that is no longer there.
+        """
+        search = status.get("search") or {}
+        if search.get("acceptance") != "best":
+            return [f"search policy            every iteration continues from the "
+                    f"previous one, improving or not"]
+        base = search.get("base_iteration")
+        return [
+            "search policy            hill-climb with rejection: an iteration that does "
+            "NOT beat the",
+            "                         best objective is undone. The parameter values below "
+            "are the",
+            "                         BEST set so far"
+            + (f" (iteration {base})" if base is not None else "")
+            + ", so a change listed in the history",
+            "                         as not improving is no longer in the file. Your "
+            "proposal is a",
+            "                         change to the best set.",
+        ]
+
+    @staticmethod
     def render_objective(status: dict) -> list[str]:
         """The objective, its components and what each view simulates."""
         out = [f"objective function     {status.get('objective')}   (lower is better)"]
@@ -427,6 +465,7 @@ class CalibrationAgent:
             f"# Calibration state — {status['crop']} · {status['target']}",
             "",
             *self.render_objective(status),
+            *self.render_search(status),
             f"iterations completed   {status.get('n_completed')}",
             f"next iteration         {status.get('next_iteration')}",
             f"best so far            " + (

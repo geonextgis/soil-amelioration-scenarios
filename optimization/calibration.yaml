@@ -142,6 +142,11 @@ targets:
           scale: 1.0
     frozen: [response_table_grids]
 
+    # `best`   an iteration that does not beat the best objective is undone, and
+    #          the next one is a change to the BEST parameter set (the default).
+    # `latest` every iteration continues from the previous one, improving or not.
+    acceptance: best
+
     stopping:
       max_iterations: 100
       # Below ~6 days the error is comparable to the reporting resolution of the
@@ -374,6 +379,12 @@ targets:
           # Mean of the yearly-mean and state-mean yield RMSE (t/ha DM).
           scale: 0.50
     frozen: [phenology_parameters, response_table_grids]
+
+    # See the phenology stage. `best` matters more here than anywhere else: with
+    # two components in the objective, a rejected change left in the file shifts
+    # both of them, and the next hypothesis is tested against a canopy and a yield
+    # that nobody chose.
+    acceptance: best
 
     stopping:
       max_iterations: 100

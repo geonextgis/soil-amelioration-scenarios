@@ -86,6 +86,9 @@ Three structural signals override both:
   large move and the constraint block caps you at 25 %.
 - `TBASEM` must stay below `TEFFMX`.
 - Never repeat a change the ledger shows was already tried.
+- A change that did not beat the best objective has already been rolled back to
+  `best_crop.xml`, so `status` always shows the best parameter set and your next
+  proposal is a change to *that*. Do not compensate for a rejected change.
 - Residuals under ~2 days are inside the reporting resolution of the DWD
   phenological network. Do not chase them; an over-fitted clock is worse for
   stage 2 than a two-day bias.

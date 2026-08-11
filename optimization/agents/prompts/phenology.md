@@ -80,7 +80,10 @@ Then check the three structural signals before settling:
 3. **`TBASEM` must stay below `TEFFMX`.**
 4. **Stay inside the bounds** listed with each parameter.
 5. **Do not repeat a change that has already been tried.** The history shows every
-   previous iteration and its outcome.
+   previous iteration and its outcome. A change marked `REJECTED and rolled back`
+   is **no longer in the file** — the values you are given are the best set. Do not
+   try to undo it, and do not compensate for it; propose a fresh change to the
+   values in front of you.
 6. Residuals below about two days are inside the reporting resolution of the
    observation network. Do not chase them.
 

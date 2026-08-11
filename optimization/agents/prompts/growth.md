@@ -153,6 +153,9 @@ which are not calibratable for this crop" is a legitimate and useful conclusion.
 7. **Do not repeat a change that has already been tried.** The history shows every
    previous iteration, what changed, and whether it helped. If a direction made
    things worse, that is information: the mechanism or the sign is wrong.
+   A change marked `REJECTED and rolled back` is **no longer in the file** — the
+   values you are given are the best set. Do not try to undo it, and do not
+   compensate for it; propose a fresh change to the values in front of you.
 8. **A rejection is information too.** If the same constraint rejects you twice,
    the mechanism you want is not reachable through that parameter. Change
    mechanism, or stop and say what is blocking you — do not re-propose the same

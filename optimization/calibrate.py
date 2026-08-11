@@ -136,6 +136,17 @@ def cmd_status(args) -> int:
         },
         "next_iteration": cc.next_iteration(spec),
         "n_completed": stop["n_completed"],
+        # Which parameter set the values above are, and what happens to a change
+        # that does not improve. The agent has to know this: under `best`, a
+        # rejected change is already undone by the time it reads the history.
+        "search": {
+            "acceptance": spec.acceptance,
+            "starts_from": "the best parameter set so far" if spec.acceptance == "best"
+                           else "the most recent parameter set",
+            "current_matches_best": (spec.best_xml.exists()
+                                     and spec.best_xml.read_bytes() == spec.crop_xml.read_bytes()),
+            "base_iteration": None if not best else best["iteration"],
+        },
         "best": None if not best else {
             "iteration": best["iteration"], "objective": best["objective"],
             "components": best.get("objective_components"),
@@ -176,6 +187,11 @@ def cmd_status(args) -> int:
     if best:
         print(f"  best                  iteration {best['iteration']}  "
               f"objective {best['objective']:.4f}")
+    print(f"  acceptance            {spec.acceptance} — the next iteration changes "
+          f"{payload['search']['starts_from']}")
+    if best and not payload["search"]["current_matches_best"]:
+        print(f"  ! the staged crop.xml differs from best_crop.xml (iteration "
+              f"{best['iteration']}); it was edited outside calibrate.py")
     print(f"  next iteration        {cc.next_iteration(spec)}")
     print(f"  stopping              {'STOP — ' if stop['stop'] else ''}{stop['reason']}")
 
@@ -289,16 +305,19 @@ def cmd_run(args) -> int:
         print("\n  --force: proceeding anyway; the violations are recorded in the ledger.\n")
 
     iter_dir = spec.iteration_dir(iteration)
-    previous_xml = spec.ledger_dir / "current_crop.xml"
-    if not previous_xml.exists():
-        shutil.copyfile(spec.crop_xml, previous_xml)
+    # The set this iteration is a change *to*, and the one it rolls back to. Under
+    # `acceptance: best` it is always the best-so-far, so a rejected change never
+    # ends up in the baseline of the next hypothesis.
+    base_xml = spec.base_xml
+    if not base_xml.exists():
+        shutil.copyfile(spec.crop_xml, base_xml)
 
     # --- apply, then verify the frozen set on the written file ---------------
     if proposal:
         common.apply_parameters(spec.crop_xml, spec.crop_name, proposal)
     drift = cc.verify_frozen(spec.crop_xml, snapshot)
     if drift:
-        shutil.copyfile(previous_xml, spec.crop_xml)
+        shutil.copyfile(base_xml, spec.crop_xml)
         cc.sync_crop_xml(spec)
         print("\n  ABORTED — the write changed frozen parameters:")
         for line in drift:
@@ -353,7 +372,7 @@ def cmd_run(args) -> int:
         diagnostics, figures = result.diagnostics, result.figures
     except Exception as exc:  # noqa: BLE001 — any failure must roll back and be recorded
         status, error = "failed", f"{type(exc).__name__}: {exc}"
-        shutil.copyfile(previous_xml, spec.crop_xml)
+        shutil.copyfile(base_xml, spec.crop_xml)
         cc.sync_crop_xml(spec)
         print(f"\n  ITERATION FAILED: {error}")
         print("  crop.xml rolled back to the last good state.")
@@ -367,11 +386,14 @@ def cmd_run(args) -> int:
     # is not progress, and conflating the two either freezes best_crop.xml or makes
     # the patience counter never fire.
     min_improvement = float(spec.stopping.get("min_improvement", 0.0))
-    improved = is_best = None
+    improved = is_best = accepted = None
     if status == "completed":
         improved = (previous_best is None
                     or objective < previous_best["objective"] - min_improvement)
         is_best = previous_best is None or objective < previous_best["objective"]
+        # Third question, and the one that decides what the *next* iteration is a
+        # change to: is this set kept, or undone in favour of the best so far?
+        accepted = cc.accept(spec, is_best)
 
     record = {
         "iteration": iteration,
@@ -398,6 +420,13 @@ def cmd_run(args) -> int:
         "expected_effect": args.expected_effect,
         "improved": improved,
         "is_best": is_best,
+        # Whether these parameters survived the iteration. False means crop.xml was
+        # put back to best_crop.xml, so the next iteration is a change to the best
+        # set and not to this one.
+        "accepted": accepted,
+        "acceptance": spec.acceptance,
+        "reverted_to_best": (None if accepted is not False or not previous_best else {
+            "iteration": previous_best["iteration"], "objective": previous_best["objective"]}),
         "previous_best": None if not previous_best else {
             "iteration": previous_best["iteration"], "objective": previous_best["objective"]},
         "delta_vs_best": (None if (status != "completed" or previous_best is None)
@@ -418,9 +447,14 @@ def cmd_run(args) -> int:
     }, indent=2, default=str) + "\n")
 
     if status == "completed":
-        shutil.copyfile(spec.crop_xml, previous_xml)
         if is_best:
-            shutil.copyfile(spec.crop_xml, spec.ledger_dir / "best_crop.xml")
+            shutil.copyfile(spec.crop_xml, spec.best_xml)
+        if not accepted:
+            # Rejected: undo it. Without this the next proposal would be a change
+            # to a parameter set already known to be worse, and its effect would no
+            # longer be attributable to the one thing it changed.
+            cc.restore_best(spec)
+        shutil.copyfile(spec.crop_xml, base_xml)
 
     state = cc.read_state(spec)
     best_now = cc.best_record(spec)
@@ -522,6 +556,15 @@ def _report(spec: cc.CalibSpec, record: dict) -> None:
             print(f"  {'previous best':<40s} {record['previous_best']['objective']:.4f} "
                   f"(iter {record['previous_best']['iteration']})  -> {arrow} "
                   f"({record['delta_vs_best']:+.4f})")
+    if record["status"] == "completed":
+        if record["accepted"]:
+            print(f"  {'parameters':<40s} KEPT — the next iteration starts from these")
+        else:
+            back = record["reverted_to_best"] or {}
+            print(f"  {'parameters':<40s} REJECTED — rolled back to the best set "
+                  f"(iteration {back.get('iteration')}, objective "
+                  f"{back.get('objective', float('nan')):.4f})")
+            print(f"  {'':40s} the next iteration is a change to THAT set, not to this one")
     print(f"  {'frozen parameters intact':<40s} {record['frozen_intact']}")
     print(f"  {'elapsed':<40s} {record['elapsed_seconds']}s")
     print(f"  {'iteration dir':<40s} {record['iteration_dir']}")
@@ -542,6 +585,8 @@ def _report(spec: cc.CalibSpec, record: dict) -> None:
         "objective": record["objective"],
         "objective_components": {v: c["loss"] for v, c in (components or {}).items()},
         "improved": record["improved"],
+        "accepted": record["accepted"],
+        "reverted_to_best": record["reverted_to_best"],
         "delta_vs_best": record["delta_vs_best"],
         "parameters_changed": record["parameters_changed"],
         "frozen_intact": record["frozen_intact"],

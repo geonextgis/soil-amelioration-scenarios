@@ -779,8 +779,27 @@ class CalibSpec:
         return self.ledger_dir / "frozen_snapshot.json"
 
     @property
+    def best_xml(self) -> Path:
+        """The lowest-objective parameter set so far — the base every iteration builds on."""
+        return self.ledger_dir / "best_crop.xml"
+
+    @property
+    def base_xml(self) -> Path:
+        """The parameter set the next iteration starts from (and rolls back to)."""
+        return self.ledger_dir / "current_crop.xml"
+
+    @property
     def stopping(self) -> dict:
         return self.target_cfg.get("stopping", {}) or {}
+
+    @property
+    def acceptance(self) -> str:
+        """``best`` (default) keeps only improvements; ``latest`` keeps everything."""
+        mode = str(self.target_cfg.get("acceptance", "best")).lower()
+        if mode not in ("best", "latest"):
+            raise SystemExit(
+                f"target {self.target!r}: acceptance must be 'best' or 'latest', got {mode!r}")
+        return mode
 
     def iteration_dir(self, n: int) -> Path:
         d = self.ledger_dir / "iterations" / f"iter_{n:03d}"
@@ -906,6 +925,38 @@ def best_record(spec: CalibSpec) -> dict | None:
     done = [r for r in read_ledger(spec)
             if r.get("status") == "completed" and r.get("objective") is not None]
     return min(done, key=lambda r: r["objective"]) if done else None
+
+
+# ---------------------------------------------------------------------------
+# Acceptance — which parameter set the next iteration starts from
+# ---------------------------------------------------------------------------
+def accept(spec: CalibSpec, is_best: bool) -> bool:
+    """Does this iteration's parameter set become the base for the next one?
+
+    Under the default ``acceptance: best`` the calibration is a hill-climb *with
+    rejection*: only a set that beats every previous objective is kept. Anything
+    else is undone, so iteration N+1 is a change to the best parameters rather
+    than a change to a set already known to be worse.
+
+    That matters more here than in a sampler-driven search, because each proposal
+    is a hypothesis about one mechanism. Left to accumulate, a rejected change
+    becomes part of the baseline of every later iteration: the next hypothesis is
+    tested on top of a known-bad set, its effect is no longer attributable, and a
+    run of unlucky iterations walks the parameters somewhere nobody chose.
+
+    ``acceptance: latest`` restores the older always-accept behaviour for a study
+    that deliberately wants a random walk.
+    """
+    return True if spec.acceptance == "latest" else bool(is_best)
+
+
+def restore_best(spec: CalibSpec) -> bool:
+    """Put ``best_crop.xml`` back into every view. False if there is no best yet."""
+    if not spec.best_xml.exists():
+        return False
+    shutil.copyfile(spec.best_xml, spec.crop_xml)
+    sync_crop_xml(spec)
+    return True
 
 
 def stop_check(spec: CalibSpec) -> dict:

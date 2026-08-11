@@ -529,6 +529,92 @@ def _():
             cc.LEDGER_ROOT = original
 
 
+@test("only an improvement is kept; anything else is rejected")
+def _():
+    for target in TARGETS:
+        spec = cc.load_spec(CONFIG, "winter_wheat", target)
+        assert spec.acceptance == "best", f"{target} must reject non-improvements by default"
+        assert cc.accept(spec, is_best=True) is True
+        assert cc.accept(spec, is_best=False) is False
+        # `latest` is the escape hatch that reproduces a plain random walk.
+        spec.target_cfg = {**spec.target_cfg, "acceptance": "latest"}
+        assert cc.accept(spec, is_best=True) is True
+        assert cc.accept(spec, is_best=False) is True
+        # Anything else is a typo, and a typo here would silently change the search.
+        spec.target_cfg = {**spec.target_cfg, "acceptance": "keep-going"}
+        try:
+            spec.acceptance
+        except SystemExit:
+            continue
+        raise AssertionError("an unknown acceptance mode must be refused")
+
+
+@test("a rejected iteration restarts from the best parameters, not from itself")
+def _():
+    # The failure this guards against: iteration N makes things worse, is left in
+    # crop.xml, and iteration N+1 is then a change to a set already known to be
+    # bad — so its effect is no longer attributable to the one thing it changed.
+    spec = cc.load_spec(CONFIG, "winter_wheat", "growth")
+    source = spec.run.crop_dir / "data" / "crop" / "crop.xml"
+    with tempfile.TemporaryDirectory() as tmp:
+        original_root = cc.LEDGER_ROOT
+        cc.LEDGER_ROOT = Path(tmp) / "ledger"
+        try:
+            runs = {}
+            for view in spec.views:
+                xml = Path(tmp) / view / "data" / "crop" / "crop.xml"
+                xml.parent.mkdir(parents=True)
+                shutil.copyfile(source, xml)
+                runs[view] = dataclasses.replace(spec.runs[view], run_dir=Path(tmp) / view)
+            spec.runs = runs
+
+            # The best set: RGRLAI 0.0200, recorded exactly as calibrate.py does.
+            common.apply_parameters(spec.crop_xml, spec.crop_name, {"RGRLAI": 0.0200})
+            cc.sync_crop_xml(spec)
+            shutil.copyfile(spec.crop_xml, spec.best_xml)
+
+            # A non-improving iteration writes 0.0260 into every view ...
+            common.apply_parameters(spec.crop_xml, spec.crop_name, {"RGRLAI": 0.0260})
+            cc.sync_crop_xml(spec)
+            for view in spec.views:
+                assert cc.read_param(cc.crop_root(spec.runs[view].crop_xml),
+                                     spec.crop_name, "RGRLAI") == 0.0260
+
+            # ... and is undone, in every view, once it turns out not to be the best.
+            assert cc.restore_best(spec) is True
+            for view in spec.views:
+                value = cc.read_param(cc.crop_root(spec.runs[view].crop_xml),
+                                      spec.crop_name, "RGRLAI")
+                assert value == 0.0200, f"{view} kept the rejected value: {value}"
+
+            # With no best on record there is nothing to fall back to, and the
+            # caller has to be told rather than silently left where it was.
+            spec.best_xml.unlink()
+            assert cc.restore_best(spec) is False
+        finally:
+            cc.LEDGER_ROOT = original_root
+
+
+@test("the acceptance outcome is recorded and shown to the agent")
+def _():
+    from agents.base import render_history
+    records = [
+        {"iteration": 0, "objective": 3.0, "status": "completed", "improved": True,
+         "is_best": True, "accepted": True, "parameters_changed": {}},
+        {"iteration": 1, "objective": 2.5, "status": "completed", "improved": True,
+         "is_best": True, "accepted": True, "parameters_changed": {"RGRLAI": 0.02}},
+        {"iteration": 2, "objective": 2.9, "status": "completed", "improved": False,
+         "is_best": False, "accepted": False, "parameters_changed": {"TDWI": 19.0},
+         "reverted_to_best": {"iteration": 1, "objective": 2.5}},
+    ]
+    text = render_history(records, max_full=12)
+    assert "REJECTED and rolled back to the best set (iteration 1)" in text, text
+    # ...and in the compressed form used for older iterations.
+    brief = render_history(records + [dict(r, iteration=r["iteration"] + 10)
+                                      for r in records] * 3, max_full=2)
+    assert "reverted" in brief, brief
+
+
 @test("a failed iteration keeps its slot and is excluded from best")
 def _():
     spec = cc.load_spec(CONFIG, "winter_wheat", "growth")
