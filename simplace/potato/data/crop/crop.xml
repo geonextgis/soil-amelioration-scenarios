@@ -7,7 +7,8 @@
     <parameter id="TEFFMX" description="max. eff. temp. for emergence" unit="http://www.wurvoc.org/vocabularies/om-1.8/degree_Celsius">18.0</parameter>
     <parameter id="TSUMEM" description="temperature sum from sowing to emergence" unit="http://www.wurvoc.org/vocabularies/om-1.8/degree_Celsius_day">170.</parameter>
 
-    <parameter id="IDSL" description="indicates wheather pre-anthesis development depends on temp. (=0) or both temperature and daylengt (=1)" unit="-">0</parameter>
+    <parameter id="IDSL" description="indicates wheather pre-anthesis development depends on temp. (=0) or both temperature and daylengt (=1)" unit="-">1</parameter>
+
     <parameter id="PhotoperiodTableHour" description="Day length for correction factor of development  " unit="http://www.wurvoc.org/vocabularies/om-1.8/hour">
       <value>0</value>
       <value>8</value>

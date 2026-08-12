@@ -344,7 +344,10 @@
 				<res id="TBASEM" description="lower threshold temp. for emergence" datatype="DOUBLE" unit="http://www.wurvoc.org/vocabularies/om-1.8/degree_Celsius"/>
 				<res id="TEFFMX" description="max. eff. temp. for emergence" datatype="DOUBLE" unit="http://www.wurvoc.org/vocabularies/om-1.8/degree_Celsius"/>
 				<res id="TSUMEM" description="temperature sum from sowing to emergence" datatype="DOUBLE" unit="http://www.wurvoc.org/vocabularies/om-1.8/degree_Celsius"/>
-				<res id="IDSL" description="indicates wheather pre-anthesis development depends on temp. (=0) or both temperature and daylengt (=1)" datatype="INT" unit="http://www.wurvoc.org/vocabularies/om-1.8/one"/>			
+				<res id="IDSL" description="indicates wheather pre-anthesis development depends on temp. (=0) or both temperature and daylengt (=1)" datatype="INT" unit="http://www.wurvoc.org/vocabularies/om-1.8/one"/>
+				<res id="VERSAT" datatype="DOUBLE" description="satured vernalisation requirement" unit="http://www.wurvoc.org/vocabularies/om-1.8/one" />
+				<res id="VBASE" datatype="DOUBLE" description="base vernalisation requirement" unit="http://www.wurvoc.org/vocabularies/om-1.8/one" />
+        		<res id="VERNRT" datatype="DOUBLEARRAY" description="" unit="http://www.wurvoc.org/vocabularies/om-1.8/one" />	
 				<res id="PhotoperiodTableHour" description="correction factor of development rate in dependence of day length" datatype="DOUBLEARRAY" unit="http://www.wurvoc.org/vocabularies/om-1.8/one"/>
 				<res id="PhotoperiodTableFactor" description="correction factor of development rate in dependence of day length" datatype="DOUBLEARRAY" unit="http://www.wurvoc.org/vocabularies/om-1.8/one"/>
 				<res id="TSUM1" description="temperature sum from emergence to anthesis" datatype="DOUBLE" unit=""/>
@@ -942,6 +945,9 @@
 			<input id="cTSUM2" source="crop.TSUM2"/>
 			<input id="cTBASEM" source="crop.TBASEM"/>
 			<input id="cTEFFMX" source="crop.TEFFMX"/>
+			<input id="cVBASE" source="crop.VBASE" />
+			<input id="cVERSAT" source="crop.VERSAT" />
+			<input id="cVERNRT" source="crop.VERNRT" />
 		
 			<input id="cPhotoperiodTableHour" source="crop.PhotoperiodTableHour"/>
 			<input id="cPhotoperiodTableFactor" source="crop.PhotoperiodTableFactor"/>
