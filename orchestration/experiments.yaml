@@ -42,3 +42,7 @@ slurm:
   walltime: "03:00:00"
   num_nodes: 50 # per experiment; sized so many experiments can run concurrently
   num_tasks_per_node: 8
+  # Size of the partition. Each runner blocks until its own jobs finish, so the
+  # generated submit script drives cluster_nodes // num_nodes experiments at a
+  # time instead of launching all of them and oversubscribing the queue.
+  cluster_nodes: 100
