@@ -9,8 +9,8 @@
     <parameter id="TSUMEM" description="temperature sum from sowing to emergence" unit="http://www.wurvoc.org/vocabularies/om-1.8/degree_Celsius_day">70.0</parameter>
     
     <parameter id="IDSL" description="indicates wheather pre-anthesis development depends on temp. (=0) or both temperature and daylengt (=1)" unit="-">2</parameter>
-    <parameter id="VERSAT" description="satured vernalisation requirement" unit="d">70</parameter>
-	  <parameter id="VBASE" description="base vernalisation requirement" unit="d">14</parameter>
+    <parameter id="VERSAT" description="satured vernalisation requirement" unit="d">24.0</parameter>
+	  <parameter id="VBASE" description="base vernalisation requirement" unit="d">7.0</parameter>
 	  <parameter id="VERNRT" description="" unit="">
 	    <value>-10.</value>	 <value>0.</value>	
 	    <value>-4.</value>	 <value>0.</value>	
@@ -31,7 +31,7 @@
       <value>1.0</value>
       <value>1.0</value>
     </parameter>
-    <parameter id="TSUM1" description="temperature sum from emergance to anthesis" unit="http://www.wurvoc.org/vocabularies/om-1.8/degree_Celsius_day">804</parameter>  <parameter id="TSUM2" description="temperature sum from anthesis to maturity" unit="http://www.wurvoc.org/vocabularies/om-1.8/degree_Celsius_day">1235</parameter>  <parameter id="TsumIncrementTableMeanTemp" description="Daily increase in temperature sum as function of av. temp. [Cel;Cel d]" unit="http://www.wurvoc.org/vocabularies/om-1.8/degree_Celsius_day">
+    <parameter id="TSUM1" description="temperature sum from emergance to anthesis" unit="http://www.wurvoc.org/vocabularies/om-1.8/degree_Celsius_day">400.0</parameter>  <parameter id="TSUM2" description="temperature sum from anthesis to maturity" unit="http://www.wurvoc.org/vocabularies/om-1.8/degree_Celsius_day">1134.0</parameter>  <parameter id="TsumIncrementTableMeanTemp" description="Daily increase in temperature sum as function of av. temp. [Cel;Cel d]" unit="http://www.wurvoc.org/vocabularies/om-1.8/degree_Celsius_day">
       <value>0.00</value>
       <value>3.00</value>
       <value>21.00</value>

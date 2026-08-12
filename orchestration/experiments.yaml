@@ -28,7 +28,8 @@ soils: [S1, S2, S3, DL, DLB]
 # Climate sources -----------------------------------------------------------
 climate_dwd: /beegfs/common/data/climate/dwd/csvs/germany_ubn_1951-01-01_to_2024-08-30
 climate_root_hyras: /data01/FDS/muduchuru/Atmos/NEXGDDP_HYRAS_BC_CSV
-gcms: [ACCESS-CM2, CanESM5, EC-Earth3, GFDL-ESM4, MIROC6]
+# gcms: [ACCESS-CM2, CanESM5, EC-Earth3, GFDL-ESM4, MIROC6]
+gcms: [ACCESS-CM2, EC-Earth3, MIROC6]
 
 # Period table (inclusive years) + the date-string baked into HYRAS filenames.
 periods:

@@ -936,7 +936,7 @@ llm:
       # Phenology has the cleanest attribution rules of the two stages
       # (flowering -> TSUM1, duration -> TSUM2), so there is nothing to gain from
       # sampling.
-      temperature: 0.1
+      temperature: 0.5
     growth:
       model: qwen3.6:35b-a3b
       temperature: 0.2
