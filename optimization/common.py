@@ -344,8 +344,14 @@ def build_run_dir(spec: RunSpec, rebuild: bool = False) -> dict:
         "testrun": False,
         "num_tasks_per_node": s["num_tasks_per_node"],
         "num_nodes": s["num_nodes"],
+        "cpus_per_node": s.get("cpus_per_node", 80),
         "partition": s["partition"],
         "walltime": s["walltime"],
+        # Only consulted when the run attaches to a held allocation: how much
+        # time must be left before starting an iteration. The iteration is a
+        # subset run of minutes, so `walltime` (sized for a full submission)
+        # would refuse to start for hours of a perfectly usable allocation.
+        "min_remaining": s.get("min_remaining", "00:30:00"),
         "start_line": 1,
     }}, sort_keys=False))
 
@@ -437,6 +443,16 @@ def run_simplace(spec: RunSpec, iteration: int, log_path: Path | None = None) ->
     )
     log.write_text(f"$ {runner} {spec.run_config}\n\n{proc.stdout}\n--- stderr ---\n{proc.stderr}")
 
+    if proc.returncode == 3:
+        # The runner refused to start inside a held allocation with too little
+        # time left. Nothing ran, so this is not a model failure — say so, or the
+        # generic message sends the reader hunting through SIMPLACE logs.
+        raise RuntimeError(
+            "held allocation has too little time left to run this iteration.\n"
+            "  python orchestration/hold_nodes.py status   # what is left\n"
+            "  python orchestration/hold_nodes.py release  # then hold again, "
+            "or drop it and let runs submit their own jobs\n"
+            f"  see {log}")
     if proc.returncode != 0:
         raise RuntimeError(f"SIMPLACE run failed (rc={proc.returncode}); see {log}")
 

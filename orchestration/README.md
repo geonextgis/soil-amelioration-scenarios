@@ -24,6 +24,42 @@ python simplace/<crop>/simplace_runner_cluster.py simplace/<crop>/runs/<exp_id>/
 
 Run dirs are independent, so all 85 can be generated and submitted in parallel.
 
+## Submitting a set of experiments
+
+`generate.py` writes two drivers into `simplace/runs_submit/` for whatever it just
+generated. They differ only in **who owns the nodes**:
+
+| | `campaign_<label>_<hash>.sbatch` | `submit_<label>_<hash>.sh` |
+|---|---|---|
+| Allocation | one, `slurm.campaign_nodes`, held start to finish | one set per experiment, released after each |
+| Experiments | sequential inside that allocation, each using all of it | `cluster_nodes // num_nodes` at a time |
+| Queue waits | once, before the first experiment | once **per experiment** |
+| Run with | `sbatch campaign_....sbatch` | `bash submit_....sh` |
+
+```bash
+sbatch simplace/runs_submit/campaign_<label>_<hash>.sbatch                       # preferred
+sbatch --export=ALL,SIMPLACE_RESUME=1 simplace/runs_submit/campaign_<label>_<hash>.sbatch  # resume
+```
+
+The campaign job is the one to use when the partition is busy: re-queueing between
+experiments is what dominates wall-clock there. Inside the allocation each
+experiment runs as `nodes × num_tasks_per_node` concurrent `srun` job steps
+(`simplace_runner_cluster.py --mode alloc`) over location-aligned chunks of its
+project CSV — nothing is submitted, so nothing waits.
+
+Its two costs are worth knowing before you submit:
+
+- **It starts only when `campaign_nodes` are free at once.** A smaller
+  `campaign_nodes` starts sooner; a larger one finishes sooner once started.
+- **`campaign_walltime` has to cover every experiment end to end.** Each
+  experiment writes `.completed_<exp_id>` in its run dir on success, and the job
+  refuses to start an experiment it cannot finish (exit 3 → the loop stops
+  cleanly rather than losing a half-written experiment to the walltime). Resubmit
+  with `SIMPLACE_RESUME=1` to pick up the rest.
+
+Progress: `simplace/runs_submit/logs/campaign_<label>_<hash>-<jobid>.out` for the
+campaign, `<run_dir>/log/step_<exp>_<first>_<last>.out` for an individual chunk.
+
 ## What the generator handles (contracts that differ by climate source)
 
 | | Baseline (DWD) | HYRAS (OBS + 5 GCMs) |

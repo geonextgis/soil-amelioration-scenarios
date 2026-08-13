@@ -25,14 +25,14 @@
       <value>18</value>
     </parameter>
     <parameter id="PhotoperiodTableFactor" description="correction factor of development rate in dependence of day length [h;-]" unit="http://www.wurvoc.org/vocabularies/om-1.8/one">
-      <value>0</value>
-      <value>1</value>
-      <value>1</value>
-      <value>1</value>
-      <value>1</value>
+      <value>0.0</value>
+      <value>0.2625</value>
+      <value>0.375</value>
+      <value>1.0</value>
+      <value>1.0</value>
     </parameter>
-    <parameter id="TSUM1" description="temperature sum from emergance to anthesis" unit="http://www.wurvoc.org/vocabularies/om-1.8/degree_Celsius_day">621</parameter>
-    <parameter id="TSUM2" description="temperature sum from anthesis to maturity" unit="http://www.wurvoc.org/vocabularies/om-1.8/degree_Celsius_day">855</parameter>
+    <parameter id="TSUM1" description="temperature sum from emergance to anthesis" unit="http://www.wurvoc.org/vocabularies/om-1.8/degree_Celsius_day">600.0</parameter>
+    <parameter id="TSUM2" description="temperature sum from anthesis to maturity" unit="http://www.wurvoc.org/vocabularies/om-1.8/degree_Celsius_day">900.0</parameter>
     <parameter id="TsumIncrementTableMeanTemp" description="Daily increase in temperature sum as function of av. temp. [Cel;Cel d]" unit="http://www.wurvoc.org/vocabularies/om-1.8/degree_Celsius_day">
       <value>-5.00</value>
       <value>0.00</value>

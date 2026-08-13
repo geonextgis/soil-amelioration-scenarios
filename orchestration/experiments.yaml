@@ -43,7 +43,29 @@ slurm:
   walltime: "03:00:00"
   num_nodes: 50 # per experiment; sized so many experiments can run concurrently
   num_tasks_per_node: 8
+  cpus_per_node: 80 # cores per compute node; sets cpus-per-task = this / tasks
   # Size of the partition. Each runner blocks until its own jobs finish, so the
   # generated submit script drives cluster_nodes // num_nodes experiments at a
   # time instead of launching all of them and oversubscribing the queue.
   cluster_nodes: 100
+
+  # --- Single-allocation campaign -------------------------------------------
+  # generate.py also writes campaign_<label>_<hash>.sbatch: ONE allocation of
+  # campaign_nodes, held from the first experiment to the last. Every experiment
+  # runs inside it as srun job steps (simplace_runner_cluster.py --mode alloc),
+  # so nodes are never handed back and re-queued between experiments — which on
+  # a busy partition is where most of the wall-clock goes.
+  #
+  # The trade-off is the allocation itself: it starts only once campaign_nodes
+  # are free simultaneously, and campaign_walltime must cover every experiment
+  # end to end (they run one after another, each using the full allocation).
+  # Whatever the walltime does not reach is picked up by
+  #   sbatch --export=ALL,SIMPLACE_RESUME=1 campaign_....sbatch
+  # which skips experiments that wrote a completion marker.
+  campaign_nodes: 50 # held for the whole campaign; <= cluster_nodes
+  campaign_walltime: "24:00:00"
+  # Memory per CPU for the allocation. Must be set: without it the first srun
+  # step on a node claims the node's whole memory and the other
+  # num_tasks_per_node steps stall behind it inside our own allocation.
+  # compute nodes have 95000M / 80 cores.
+  mem_per_cpu: 1100M

@@ -23,11 +23,22 @@ climate:
 
 slurm:
   singularity_image: /beegfs/common/singularity/simplace/simplace_5.0-3897.sif
-  partition: highmem
+  partition: compute
   walltime: "03:00:00"
-  num_nodes: 15
+  num_nodes: 40
   num_tasks_per_node: 8
+  cpus_per_node: 80
   debug: false
+  # An iteration normally submits its own SLURM jobs and releases the nodes when
+  # it ends, so every iteration — two of them per growth iteration, one per view —
+  # pays a fresh queue wait. `orchestration/hold_nodes.py hold` keeps one
+  # allocation for the whole session and every iteration attaches to it instead;
+  # nothing here has to change for that, the runner finds it on its own.
+  #
+  # Only read when attached to a held allocation: refuse to start an iteration
+  # with less than this left, so a run cannot be cut in half by the walltime.
+  # Sized for a subset iteration (minutes), not for `walltime` above.
+  min_remaining: "00:30:00"
 
 # Which input tables get staged into a calibration run dir under the canonical
 # names the solution reads (data/soil/soil.csv, data/management/location.csv,
@@ -69,8 +80,8 @@ targets:
         # Subset keeps an iteration cheap enough to reason about. null = everything.
         subset:
           n_locations: 400
-          year_start: 1995
-          year_end: 2022
+          year_start: 1979
+          year_end: 1990
 
   # -- stage 2: LAI and yield, calibrated together --------------------------
   growth:

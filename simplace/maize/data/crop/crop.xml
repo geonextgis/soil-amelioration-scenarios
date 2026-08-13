@@ -33,7 +33,7 @@
       <value>1</value>
 	    <value>1</value>
     </parameter>
-    <parameter id="TSUM1" description="temperature sum from emergance to anthesis" unit="http://www.wurvoc.org/vocabularies/om-1.8/degree_Celsius_day">738</parameter>
+    <parameter id="TSUM1" description="temperature sum from emergance to anthesis" unit="http://www.wurvoc.org/vocabularies/om-1.8/degree_Celsius_day">730.0</parameter>
     <parameter id="TSUM2" description="temperature sum from anthesis to maturity" unit="http://www.wurvoc.org/vocabularies/om-1.8/degree_Celsius_day">693</parameter>
     <parameter id="TsumIncrementTableMeanTemp" description="Daily increase in temperature sum as function of av. temp. [Cel;Cel d]" unit="http://www.wurvoc.org/vocabularies/om-1.8/degree_Celsius_day">
       <value>0.00</value>
@@ -42,10 +42,10 @@
       <value>35.00</value>
     </parameter>
     <parameter id="TsumIncrementTableRate" description="Daily increase in temperature sum as function of av. temp. [Cel;Cel d]" unit="http://www.wurvoc.org/vocabularies/om-1.8/degree_Celsius_day">
-      <value>0.00</value>
-      <value>0.00</value>
-      <value>24.00</value>
-      <value>24.00</value>
+      <value>0.0</value>
+      <value>0.0</value>
+      <value>24.0</value>
+      <value>9.6</value>
     </parameter>
     <parameter id="DVSI" description="Initial DVS" unit="http://www.wurvoc.org/vocabularies/om-1.8/one">0.</parameter>
     <parameter id="DVSEND" description="Development stage at harvest (=2.0 at maturity)" unit="http://www.wurvoc.org/vocabularies/om-1.8/one">2.00</parameter>

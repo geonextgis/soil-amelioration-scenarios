@@ -18,7 +18,7 @@ The workflow is **two stages**:
 ```
 
 **Why LAI and yield are calibrated together.** Radiation use efficiency, light
-interception and dry-matter partitioning set biomass *and* leaf area. Calibrated
+interception and dry-matter partitioning set biomass _and_ leaf area. Calibrated
 in sequence, every accepted yield change silently rewrites the canopy — and
 freezing the canopy to prevent that removes most of the yield levers with it. So
 one iteration runs the model twice from the same `crop.xml` (the GLASS-LAI point
@@ -32,10 +32,10 @@ against noise, so the clock is settled first and then frozen.
 Two agent runtimes drive the same machinery, and differ only in which model does
 the reasoning:
 
-| | who decides | entry point |
-| --- | --- | --- |
-| **Local agents** | a local LLM over Ollama, on this machine | `python optimization/agentic.py run --crop winter_wheat --target growth` |
-| **Claude Code agents** | Claude, in this session | `/calibrate-phenology`, `/calibrate-growth` |
+|                        | who decides                              | entry point                                                              |
+| ---------------------- | ---------------------------------------- | ------------------------------------------------------------------------ |
+| **Local agents**       | a local LLM over Ollama, on this machine | `python optimization/agentic.py run --crop winter_wheat --target growth` |
+| **Claude Code agents** | Claude, in this session                  | `/calibrate-phenology`, `/calibrate-growth`                              |
 
 Both go through `calibrate.py`, which is the **only** path to `crop.xml`. It
 validates the proposal, verifies the freeze against the written file, runs
@@ -74,6 +74,41 @@ optimization/
 
 Everything below is for one crop; substitute `--crop winter_rapeseed`,
 `spring_barley`, `potato` or `maize` as needed.
+
+## First: hold the nodes for the session
+
+Each iteration submits its own SLURM jobs and releases them when it ends, so
+every iteration pays a fresh queue wait — twice per growth iteration, since the
+LAI and yield views are two runs. On a busy partition that wait, not the model,
+is most of the time between deciding a parameter and seeing its effect.
+
+Hold one allocation for the whole session instead:
+
+```bash
+python orchestration/hold_nodes.py hold --nodes 40 --walltime 08:00:00 --partition compute
+python optimization/calibrate.py run --crop winter_wheat --target growth ...   # attaches
+python optimization/calibrate.py run --crop winter_wheat --target growth ...   # attaches
+python orchestration/hold_nodes.py status      # nodes, time left
+python orchestration/hold_nodes.py release     # when you stop for the day
+```
+
+`hold` blocks until SLURM grants the nodes — that is the one queue wait for the
+whole session — then records the job id in `.simplace_allocation.json` at the
+repo root. Every run after that attaches its work to those nodes with
+`srun --jobid=`. Nothing else changes: `calibrate.py`, the agents and the config
+files know nothing about it, and with no allocation held every run submits its
+own jobs exactly as before.
+
+Two things to keep in mind:
+
+- **Held nodes are idle between iterations and still charged to you.** Hold for a
+  working session, release when you stop. `--walltime` is a ceiling, not a plan.
+- **A run will not start if less than `slurm.min_remaining` (30 min) is left**, so
+  an iteration cannot be cut in half by an expiring allocation. It fails with a
+  message pointing at `hold_nodes.py status`, having changed nothing.
+
+If the allocation expires or is cancelled, the next run says so and falls back to
+submitting its own jobs — it never silently does something different.
 
 ## Stage 1 — phenology
 
@@ -169,14 +204,14 @@ The agents run the same `calibrate.py` commands shown above. `promote` and
 
 ## Useful flags
 
-| Flag | What it does |
-| --- | --- |
-| `--locations N` | override the subset size — use 30–50 while working out a change, the configured value for the run that counts |
-| `--dry-run` | validate a proposal and print the verdict as JSON; writes nothing at all, not even to `rejected.jsonl`. This is the agents' pre-flight, and it is free |
-| `--skip-run` | re-score whatever is already in `out/` instead of simulating |
-| `--rebuild` | rebuild the run dirs from scratch (warns if the ledger is non-empty) |
-| `--force` | apply despite constraint violations; recorded in the ledger |
-| `--device local` | use `simplace_runner.py` instead of the SLURM driver |
+| Flag             | What it does                                                                                                                                           |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `--locations N`  | override the subset size — use 30–50 while working out a change, the configured value for the run that counts                                          |
+| `--dry-run`      | validate a proposal and print the verdict as JSON; writes nothing at all, not even to `rejected.jsonl`. This is the agents' pre-flight, and it is free |
+| `--skip-run`     | re-score whatever is already in `out/` instead of simulating                                                                                           |
+| `--rebuild`      | rebuild the run dirs from scratch (warns if the ledger is non-empty)                                                                                   |
+| `--force`        | apply despite constraint violations; recorded in the ledger                                                                                            |
+| `--device local` | use `simplace_runner.py` instead of the SLURM driver                                                                                                   |
 
 Other subcommands: `diagnose` (metrics and figures without simulating),
 `history`, `show --iteration N`, `restore-baseline` (put the stage's starting
@@ -200,12 +235,12 @@ targets:
         exp_name: CALIB_GROWTH_LAI
         project_csv: project/project_{crop}_LAI.csv
         inputs: lai
-        subset: {n_locations: 400}
+        subset: { n_locations: 400 }
       yield:
         exp_name: CALIB_GROWTH_YIELD
         project_csv: project/project_{crop}.csv
         inputs: production
-        subset: {n_locations: 400, year_start: 2000, year_end: 2023}
+        subset: { n_locations: 400, year_start: 2000, year_end: 2023 }
 ```
 
 and `calibration.yaml` weighs them:
@@ -216,8 +251,8 @@ targets:
     objective:
       name: joint_lai_yield
       components:
-        lai:   {weight: 0.5, scale: 0.15}   # DVS-binned LAI RMSE (m2/m2)
-        yield: {weight: 0.5, scale: 0.50}   # mean of temporal + spatial RMSE (t/ha)
+        lai: { weight: 0.5, scale: 0.15 } # DVS-binned LAI RMSE (m2/m2)
+        yield: { weight: 0.5, scale: 0.50 } # mean of temporal + spatial RMSE (t/ha)
 ```
 
     objective = Σ weightᵢ · (lossᵢ / scaleᵢ) / Σ weightᵢ
@@ -255,7 +290,7 @@ Calibration runs are isolated in
   never modified except by `calibrate.py promote`.
 - `data/soil/soil.csv`, `data/management/location.csv`,
   `data/management/fertilizer_<crop>.csv` are copies of the staged source tables
-  (see *input profiles* below).
+  (see _input profiles_ below).
 - `solution/`, `data/{slim,soilcnp}` and the static management XMLs are symlinks
   to the crop's shared inputs; `data/co2/co2.csv` is staged.
 - `project/project.csv` is generated: subset per config, then sorted
@@ -276,7 +311,7 @@ years at the file tail, so an unsorted table would let two SLURM tasks handle th
 same location and silently clobber each other's output.
 
 **Clearing `out/` before each run.** Per-location output files persist, so a
-location dropped by a failed task would otherwise contribute the *previous*
+location dropped by a failed task would otherwise contribute the _previous_
 iteration's values to this iteration's loss.
 
 **Waiting out the filesystem cache.** `out/<kind>/` is deleted locally and
@@ -294,7 +329,7 @@ the canonical names the solution reads:
 - `production` — `soil.csv`, `location.csv`, `fertilizer_<crop>.csv`. Used by the
   phenology stage and by the yield view.
 - `lai` — the `*_<crop>_LAI.csv` variants. The LAI project table has its own point
-  set *and its own weather grid*, distinct from the baseline table; only ~42 % of
+  set _and its own weather grid_, distinct from the baseline table; only ~42 % of
   its points exist in the production tables, so it needs the matching
   soil/location/fertilizer rows. Crops without `*_LAI` variants fall back to
   `production` with a printed note.
@@ -307,11 +342,11 @@ observation sets do not live on the same points.
 `config.yaml → targets.<target>.views.<view>.subset` trims the project table so an
 iteration is cheap enough to reason about.
 
-| stage | view | project table | subset |
-| --- | --- | --- | --- |
-| phenology | phenology | `project_<crop>.csv` | 400 locations, 1995–2022 |
-| growth | lai | `project_<crop>_LAI.csv` | 400 locations (already one season per point) |
-| growth | yield | `project_<crop>.csv` | 400 locations, 2000–2023 |
+| stage     | view      | project table            | subset                                       |
+| --------- | --------- | ------------------------ | -------------------------------------------- |
+| phenology | phenology | `project_<crop>.csv`     | 400 locations, 1995–2022                     |
+| growth    | lai       | `project_<crop>_LAI.csv` | 400 locations (already one season per point) |
+| growth    | yield     | `project_<crop>.csv`     | 400 locations, 2000–2023                     |
 
 Locations are picked evenly across the sorted ID range, so the geographic spread
 of the full set is preserved. `--locations N` overrides every view at once. Set
@@ -319,11 +354,11 @@ of the full set is preserved. `--locations N` overrides every view at once. Set
 
 ## The losses — `objectives.py`
 
-| view | loss |
-| --- | --- |
+| view      | loss                                                                       |
+| --------- | -------------------------------------------------------------------------- |
 | phenology | mean of the flowering and maturity RMSE, in days (autumn bolting excluded) |
-| lai | RMSE over DVS-bin × year means of observed vs simulated LAI |
-| yield | mean of the yearly-mean RMSE and the state-mean RMSE, in t/ha |
+| lai       | RMSE over DVS-bin × year means of observed vs simulated LAI                |
+| yield     | mean of the yearly-mean RMSE and the state-mean RMSE, in t/ha              |
 
 Each is `process_result(run_spec) -> DataFrame` plus `loss_fn(frame) -> (loss,
 metrics)` and nothing else, plus `combine()` for the weighted objective. They are
@@ -341,9 +376,9 @@ derived:
 RGRLAI:
   enabled: true
   kind: scalar
-  mode: relative          # bounds = current value x factor, then clipped
+  mode: relative # bounds = current value x factor, then clipped
   factor: [0.5, 2.0]
-  clip:   [0.0005, 0.06]  # hard physical limits
+  clip: [0.0005, 0.06] # hard physical limits
   controls: [early_growth, rise_rate]
   meaning: >-
     Maximum relative growth rate of LAI during the exponential phase … Raise it
@@ -363,7 +398,7 @@ scratch and must not be tethered to whatever is in the file today.
 A parameter the crop does not define drops out of the space automatically —
 `VBASE` / `VERSAT` are calibrated for the crops whose `crop.xml` declares them and
 whose solution wires them into the LINTUL5 `Phenology` component (today winter
-wheat), and are reported as *absent for this crop* everywhere else. The self-test
+wheat), and are reported as _absent for this crop_ everywhere else. The self-test
 catches the other case: a parameter declared in `calibration.yaml` but defined by
 no crop at all is a typo.
 
@@ -387,25 +422,25 @@ are disabled rather than removed.
 
 Three ways to stop a parameter moving, in increasing strength:
 
-| Goal | How | Enforcement |
-|---|---|---|
-| Not calibrated in this study | `enabled: false` | refused at parse: *not a calibratable parameter* |
-| Visible but immovable | `mode: absolute` with `low: X, high: X` | `bounds` violation |
-| Provably never written | add to `frozen_groups`, list under the stage's `frozen:` | `frozen` violation, plus the XML re-read after every iteration |
+| Goal                         | How                                                      | Enforcement                                                    |
+| ---------------------------- | -------------------------------------------------------- | -------------------------------------------------------------- |
+| Not calibrated in this study | `enabled: false`                                         | refused at parse: _not a calibratable parameter_               |
+| Visible but immovable        | `mode: absolute` with `low: X, high: X`                  | `bounds` violation                                             |
+| Provably never written       | add to `frozen_groups`, list under the stage's `frozen:` | `frozen` violation, plus the XML re-read after every iteration |
 
 ## What cannot happen
 
-| Guard | Mechanism |
-| --- | --- |
-| Stage 1 is undone by stage 2 | The whole phenology set is frozen for `growth`; a snapshot is taken at handoff and **re-read from the written XML after every change**. A drift aborts the iteration and rolls `crop.xml` back. |
-| The two views drift apart | The primary view's `crop.xml` is mirrored into every other view before each run, after every rollback, and on every restore |
-| A yield change quietly wrecks the canopy | Both components are scored in the *same* iteration and both are recorded; there is no sequence in which one can be improved unobserved |
-| A parameter leaves its range | `check_within_bounds` on the flattened proposal, before the model runs |
-| A biologically incoherent profile | Table shape rules: SLA smoothness and decline to maturity, leaf-death rate monotone in temperature, RUE non-increasing after anthesis, storage organs non-decreasing |
-| Above-ground allocation stops summing to 1 | Leaves + stems + storage interpolated onto the union DVS grid and compared against the pre-change profile; elements with no possible counterweight are pinned and reported as immovable |
-| Too many things change at once | ≤ 3 parameters and ≤ 4 individual values per iteration (2 / 3 for phenology); ≤ 50 % move per value (25 % for phenology) |
-| A calibration cannot be undone | `baseline_crop.xml` per stage + `restore-baseline`; `promote` keeps a `crop.xml.pre_<stage>_calibration` backup |
-| History is lost | `ledger.jsonl` is append-only; every iteration keeps its own directory with `crop.xml`, the joined obs/sim pairs per view, metrics and figures |
+| Guard                                      | Mechanism                                                                                                                                                                                       |
+| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Stage 1 is undone by stage 2               | The whole phenology set is frozen for `growth`; a snapshot is taken at handoff and **re-read from the written XML after every change**. A drift aborts the iteration and rolls `crop.xml` back. |
+| The two views drift apart                  | The primary view's `crop.xml` is mirrored into every other view before each run, after every rollback, and on every restore                                                                     |
+| A yield change quietly wrecks the canopy   | Both components are scored in the _same_ iteration and both are recorded; there is no sequence in which one can be improved unobserved                                                          |
+| A parameter leaves its range               | `check_within_bounds` on the flattened proposal, before the model runs                                                                                                                          |
+| A biologically incoherent profile          | Table shape rules: SLA smoothness and decline to maturity, leaf-death rate monotone in temperature, RUE non-increasing after anthesis, storage organs non-decreasing                            |
+| Above-ground allocation stops summing to 1 | Leaves + stems + storage interpolated onto the union DVS grid and compared against the pre-change profile; elements with no possible counterweight are pinned and reported as immovable         |
+| Too many things change at once             | ≤ 3 parameters and ≤ 4 individual values per iteration (2 / 3 for phenology); ≤ 50 % move per value (25 % for phenology)                                                                        |
+| A calibration cannot be undone             | `baseline_crop.xml` per stage + `restore-baseline`; `promote` keeps a `crop.xml.pre_<stage>_calibration` backup                                                                                 |
+| History is lost                            | `ledger.jsonl` is append-only; every iteration keeps its own directory with `crop.xml`, the joined obs/sim pairs per view, metrics and figures                                                  |
 
 A rejected proposal is written to `rejected.jsonl` and the model is not run. A
 `--dry-run` pre-flight is not a proposal and is not recorded anywhere.
@@ -445,7 +480,7 @@ violations, the figures, and the elapsed time.
 
 The objective is the loss, but the agent diagnoses on the decomposition:
 
-**LAI** — bias per DVS bin (element *i* of the bin table maps onto element *i* of
+**LAI** — bias per DVS bin (element _i_ of the bin table maps onto element _i_ of
 `SLATableSLA`, which is what makes the bias directly actionable), then per
 location-season: peak LAI, peak timing, peak stage, early-canopy level, rise rate,
 plateau duration (days at ≥ 80 % of peak), decline rate — each as observed vs
@@ -466,10 +501,10 @@ residual year trend, correlations against `maxLAI`, `AGBiomass`, `TRANRF` and
 overshoots.
 
 **Phenology** — the flowering residual and the anthesis-to-maturity **duration**
-residual, separately. That split is the whole diagnosis: maturity is dated *from*
+residual, separately. That split is the whole diagnosis: maturity is dated _from_
 anthesis, so a `TSUM1` error propagates into the raw maturity error unchanged and
 diagnosing on it moves `TSUM2` to fix a `TSUM1` problem. The residual is then
-regressed against season warmth (a slope means the temperature *response* is
+regressed against season warmth (a slope means the temperature _response_ is
 wrong — `TEFFMX`, `TsumIncrementTableRate`) and against latitude (a gradient is the
 photoperiod signature — `PhotoperiodTableFactor`).
 
@@ -522,11 +557,11 @@ rather than forced.
 
 **Local** — `optimization/agents/`, run by `agentic.py`:
 
-| agent | job |
-| --- | --- |
-| `PhenologyAgent` | stage 1 — thermal time against DWD observations |
-| `GrowthAgent` | stage 2 — canopy and yield, jointly |
-| `AnalystAgent` | read-only review of a calibration in progress; proposes nothing |
+| agent            | job                                                             |
+| ---------------- | --------------------------------------------------------------- |
+| `PhenologyAgent` | stage 1 — thermal time against DWD observations                 |
+| `GrowthAgent`    | stage 2 — canopy and yield, jointly                             |
+| `AnalystAgent`   | read-only review of a calibration in progress; proposes nothing |
 
 Each is a thin class plus a prompt in `agents/prompts/`. The prompt is where the
 stage-specific knowledge lives — the symptom-to-parameter table, the rules that

@@ -153,31 +153,62 @@ Generate the run dirs, then submit:
 
 ```bash
 python orchestration/generate.py --crop all --climate all --soil all
-bash simplace/runs_submit/submit_<label>_<hash>.sh
+sbatch simplace/runs_submit/campaign_<label>_<hash>.sbatch     # one held allocation
 ```
+
+`generate.py` writes two drivers for the same experiment list. They differ in who
+owns the nodes:
+
+- **`campaign_<label>_<hash>.sbatch` (preferred).** One allocation of
+  `slurm.campaign_nodes`, requested once and **held until the last experiment
+  finishes**. Every experiment runs inside it as `nodes × num_tasks_per_node`
+  concurrent `srun` job steps (`simplace_runner_cluster.py --mode alloc`), so no
+  experiment is ever submitted and none re-queues. On a busy partition the
+  re-queue wait is most of the wall-clock, which is the reason to prefer this.
+  Costs: it starts only when `campaign_nodes` are free simultaneously, and
+  `slurm.campaign_walltime` must cover all experiments end to end. Each
+  experiment writes `.completed_<exp_id>` in its run dir, and the job refuses to
+  start one it cannot finish (exit 3, clean stop) — resume the rest with
+  `sbatch --export=ALL,SIMPLACE_RESUME=1 campaign_....sbatch`.
+- **`submit_<label>_<hash>.sh`.** The per-experiment path: each runner submits its
+  own SLURM jobs, blocks, and **releases the nodes when that experiment ends**, so
+  the next one queues from scratch. It drives
+  `slurm.cluster_nodes // slurm.num_nodes` experiments at a time. Do not background
+  every line instead — that oversubscribes the partition and starts one `squeue`
+  poller per experiment.
 
 The cluster driver reads the `cluster:` block of a generated run dir's config:
 
 ```bash
-python simplace/<crop>/simplace_runner_cluster.py simplace/<crop>/runs/<exp_id>/config.yaml
+python simplace/<crop>/simplace_runner_cluster.py <run_dir>/config.yaml              # auto
+python simplace/<crop>/simplace_runner_cluster.py <run_dir>/config.yaml --mode alloc # inside an allocation
 ```
 
-Each runner blocks until its own SLURM jobs finish, so the generated submit script
-drives `slurm.cluster_nodes // slurm.num_nodes` experiments at a time. Do not
-background every line instead — that oversubscribes the partition and starts one
-`squeue` poller per experiment. Smoke-test first with the run dir's
-`config_smoke.yaml` (3 locations, 1 node, output namespaced `SMOKE_<exp_id>`).
+`--mode auto` (the default) resolves in this order: an explicit `--jobid`; the
+allocation we are running inside (only when `SLURM_JOB_NUM_NODES` is set, i.e. the
+campaign job — `SLURM_JOB_ID` alone is not enough, a shell opened inside a
+long-lived `salloc` inherits it); an allocation held by `hold_nodes.py`; otherwise
+`sbatch`, exactly as before. In `sbatch` mode it splits
+`[start_line, end_line]` across `num_nodes` jobs (`num_tasks_per_node` srun tasks
+each) and polls `squeue`; in `alloc` mode it splits the same work across the
+allocation's slots and runs the steps directly, holding the nodes. Both split
+**only on location boundaries** — SIMPLACE writes one output file per location, so
+a location handled by two invocations clobbers itself.
 
-It counts rows in `input_csv`, splits `[start_line, end_line]` across `num_nodes`
-jobs (and `num_tasks_per_node` srun tasks each), generates a SLURM batch script per
-job, runs SIMPLACE inside the Singularity image, and waits for completion via `squeue`.
+Smoke-test first with the run dir's `config_smoke.yaml` (3 locations, 1 node,
+output namespaced `SMOKE_<exp_id>`).
 
 Key `cluster:` keys to switch an experiment:
 - `mount_data`   — climate source root (DWD vs. a GCM/scenario folder) → bound to `/data`
 - `exp_name`     — output namespace (`out/<exp_name>/`)
 - `input_csv`    — the project input table (selects period + `vIDPL` management)
 - `solution` / `project`, `singularity_image`, `partition`, `walltime`,
-  `num_nodes`, `num_tasks_per_node`, `start_line`/`end_line`.
+  `num_nodes`, `num_tasks_per_node`, `cpus_per_node`, `start_line`/`end_line`.
+
+Campaign-level keys live in `orchestration/experiments.yaml` under `slurm:`:
+`campaign_nodes`, `campaign_walltime`, `mem_per_cpu` (must be set — without it the
+first `srun` step on a node claims all its memory and the sibling steps stall
+inside our own allocation), `cpus_per_node`.
 
 ## Workflow Goals for This Phase
 
@@ -227,12 +258,25 @@ SIMPLACE, scores with `optimization/objectives.py` +
 `optimization/calibration/<crop>/<stage>/ledger.jsonl`.
 
 ```bash
+python orchestration/hold_nodes.py hold --nodes 40 --walltime 08:00:00      # optional, see below
 python optimization/calibrate.py run     --crop <crop> --target phenology   # iterate
 python optimization/calibrate.py promote --crop <crop> --target phenology --yes
 python optimization/calibrate.py handoff --crop <crop>                      # seeds stage 2
 python optimization/calibrate.py run     --crop <crop> --target growth      # iterate
 python optimization/calibrate.py promote --crop <crop> --target growth --yes
+python orchestration/hold_nodes.py release                                  # end of session
 ```
+
+**Holding nodes across iterations.** By default every iteration submits its own
+SLURM jobs and releases the nodes when it ends, so each one queues again — twice
+per growth iteration, since LAI and yield are separate runs.
+`orchestration/hold_nodes.py hold` takes one allocation with `salloc --no-shell`
+and records it in `.simplace_allocation.json`; the runner finds it on its own and
+attaches each run with `srun --jobid=`, so nothing else needs configuring. Held
+nodes sit idle between iterations and are still charged, so `release` at the end
+of a session. A run refuses to start with less than `slurm.min_remaining` left
+rather than be cut in half, and falls back to submitting if the allocation is
+gone. `status` shows what is left.
 
 Nothing writes to `simplace/<crop>/data/crop/crop.xml` except
 `calibrate.py promote --yes`; do not edit it by hand. `restore-baseline` puts a

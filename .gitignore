@@ -362,3 +362,5 @@ unused/simplace/winter_wheat_reference/
 Thumbs.db
 unused/
 optimization/calibration/
+# Held-node session written by orchestration/hold_nodes.py (machine-local state)
+.simplace_allocation.json
