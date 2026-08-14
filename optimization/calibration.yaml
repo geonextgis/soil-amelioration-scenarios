@@ -920,7 +920,7 @@ llm:
   history_iterations: 6
   # Malformed JSON or a proposal that violates a constraint is handed back to the
   # model with the exact error, this many times, before the iteration is skipped.
-  max_repair_attempts: 5
+  max_repair_attempts: 20
   # Recorded in the ledger with every proposal, so a decision can always be traced
   # to the model that made it.
   record_prompts: true
