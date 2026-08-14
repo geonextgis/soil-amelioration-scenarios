@@ -20,7 +20,8 @@ paths:
   runs_subdir: runs # simplace/<crop>/runs/<exp_id>/
 
 # The five phenology/LAI/yield-calibrated crops.
-crops: [winter_wheat, winter_rapeseed, spring_barley, potato, maize]
+# crops: [winter_wheat, winter_rapeseed, spring_barley, potato, maize]
+crops: [spring_barley, potato, maize]
 
 # Soil scenarios. Files are <SOIL>_BZE.csv in paths.soil_dir. S1 is the baseline.
 soils: [S1, S2, S3, DL, DLB]
