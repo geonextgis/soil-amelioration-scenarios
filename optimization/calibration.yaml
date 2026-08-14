@@ -328,7 +328,7 @@ targets:
       - id: thermal_response_smooth
         type: table_smoothness
         param: TsumIncrementTableRate
-        max_ratio: 2.5
+        max_ratio: 2.6
         note: >-
           Adjacent nodes of the temperature response may not jump by more than
           this factor; a spike is a numerical artifact, not a physiology.

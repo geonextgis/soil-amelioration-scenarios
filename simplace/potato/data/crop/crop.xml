@@ -4,7 +4,7 @@
   <crop description=" CROP DATA FILE for use with LINTUL5 (NPK-lim.) for potato, August 2011 Based on WOFOST crop data set POT701.CAB Regions : Germany, France (R21,22,23,24,25) The Netherlands, Belgium, Luxembourg, United Kingdom, Ireland, Denmark. Sowing date 15 April except United Kingdom with sowing date 25 April.">
     <parameter id="CropName" unit="-">potato</parameter>
     <parameter id="TBASEM" description="lower threshold temp. for emergence" unit="http://www.wurvoc.org/vocabularies/om-1.8/degree_Celsius">3.0</parameter>
-    <parameter id="TEFFMX" description="max. eff. temp. for emergence" unit="http://www.wurvoc.org/vocabularies/om-1.8/degree_Celsius">18.0</parameter>
+    <parameter id="TEFFMX" description="max. eff. temp. for emergence" unit="http://www.wurvoc.org/vocabularies/om-1.8/degree_Celsius">22.0</parameter>
     <parameter id="TSUMEM" description="temperature sum from sowing to emergence" unit="http://www.wurvoc.org/vocabularies/om-1.8/degree_Celsius_day">170.</parameter>
 
     <parameter id="IDSL" description="indicates wheather pre-anthesis development depends on temp. (=0) or both temperature and daylengt (=1)" unit="-">1</parameter>
@@ -32,16 +32,16 @@
       <value>30</value>
     </parameter>
     <parameter id="TsumIncrementTableRate" description="Daily increase in temperature sum as function of av. temp." unit="http://www.wurvoc.org/vocabularies/om-1.8/degree_Celsius">
-      <value>0</value>
-      <value>0</value>
-      <value>11</value>
-      <value>28</value>
+      <value>0.0</value>
+      <value>0.0</value>
+      <value>11.0</value>
+      <value>26.0</value>
     </parameter>
     <parameter id="DVSI" description="Initial DVS" unit="http://www.wurvoc.org/vocabularies/om-1.8/one">0.</parameter>
     <parameter id="DVSEND" description="Development stage at harvest (=2.0 at maturity)" unit="http://www.wurvoc.org/vocabularies/om-1.8/one">2.00</parameter>
 
     <parameter id="TDWI" description="Initial total crop dry weight" unit="http://www.wurvoc.org/vocabularies/om-1.8/gram_per_square_metre">115.0</parameter>
-    <parameter id="RGRLAI" description="Maximum Relative increase in LAI" unit="http://www.wurvoc.org/vocabularies/om-1.8/reciprocal_day">0.00900</parameter>
+    <parameter id="RGRLAI" description="Maximum Relative increase in LAI" unit="http://www.wurvoc.org/vocabularies/om-1.8/reciprocal_day">0.014</parameter>
 
     <parameter id="SLATableDVS" description="DVS for specific leaf area" unit="http://www.wurvoc.org/vocabularies/om-1.8/one">
       <value>0</value>
@@ -49,9 +49,9 @@
       <value>2</value>
     </parameter>
     <parameter id="SLATableSLA" description="Specific leaf area as function of DVS" unit="http://www.wurvoc.org/vocabularies/om-1.8/square_metre_per_gram">
-      <value>0.020</value>
-      <value>0.018</value>
-      <value>0.020</value>
+      <value>0.02</value>
+      <value>0.011</value>
+      <value>0.0174</value>
     </parameter>
     <parameter id="SPA" description="specific pod area" unit="http://www.wurvoc.org/vocabularies/om-1.8/square_metre_per_gram">0</parameter>
     <parameter id="SSATableDVS" description="DVS for specific stem area" unit="http://www.wurvoc.org/vocabularies/om-1.8/one">
@@ -62,7 +62,7 @@
       <value>0</value>
       <value>0</value>
     </parameter>
-    <parameter id="LAICR" description="Critical leaf area index for overshadowing" unit="http://www.wurvoc.org/vocabularies/om-1.8/square_metre_per_square_metre">2.5</parameter>
+    <parameter id="LAICR" description="Critical leaf area index for overshadowing" unit="http://www.wurvoc.org/vocabularies/om-1.8/square_metre_per_square_metre">2.1</parameter>
     <parameter id="TBASE" description="lower theshold temp. for increase in LAI" unit="http://www.wurvoc.org/vocabularies/om-1.8/degree_Celsius">2.0</parameter>
 
     <parameter id="KDIFTableDVS" description="DVS for extiction coefficient for diffuse visible light" unit="http://www.wurvoc.org/vocabularies/om-1.8/one">
@@ -80,10 +80,10 @@
       <value>2</value>
     </parameter>
     <parameter id="RUETableRUE" description="Radiation use efficiency for biomass production as function of DVS" unit="http://www.wurvoc.org/vocabularies/om-1.8/gram_per_megajoule">
-      <value>2.8</value>
-      <value>2.8</value>
-      <value>2.8</value>
-      <value>0</value>
+      <value>4.8</value>
+      <value>4.725</value>
+      <value>4.3</value>
+      <value>0.0</value>
     </parameter>
     <parameter id="TMPFTableMeanTemperature" description="Mean daytime temp for reduction factor of RUE" unit="http://www.wurvoc.org/vocabularies/om-1.8/degree_Celsius">
       <value>0</value>
@@ -188,7 +188,7 @@
       <value>1</value>
     </parameter>
 
-    <parameter id="RDRL" description="max. rel. death rate of leaves due to water stress" unit="http://www.wurvoc.org/vocabularies/om-1.8/reciprocal_day">0.015</parameter>
+    <parameter id="RDRL" description="max. rel. death rate of leaves due to water stress" unit="http://www.wurvoc.org/vocabularies/om-1.8/reciprocal_day">0.01</parameter>
     <parameter id="RDRLeavesTableMeanTemp" description="Daily mean temperature for relative death rate of leaves" unit="http://www.wurvoc.org/vocabularies/om-1.8/degree_Celsius">
       <value>-10</value>
       <value>10</value>
@@ -197,11 +197,11 @@
       <value>50</value>
     </parameter>
     <parameter id="RDRLeavesTableRelativeRate" description="Relative death rate of leaves as a function of daily mean temperature" unit="http://www.wurvoc.org/vocabularies/om-1.8/reciprocal_day">
-      <value>0</value>
+      <value>0.0</value>
       <value>0.01</value>
       <value>0.015</value>
-      <value>0.02</value>
-      <value>0.04</value>
+      <value>0.015</value>
+      <value>0.03</value>
     </parameter>
     <parameter id="RDRSHM" description="rel. death rate of leaves due to shading (above LAICR)" unit="http://www.wurvoc.org/vocabularies/om-1.8/reciprocal_day">0.080</parameter>
     <parameter id="RDRRootsTableDVS" description="DVS for relative death rate of stems" unit="http://www.wurvoc.org/vocabularies/om-1.8/one">
@@ -238,7 +238,7 @@
     <parameter id="MaximalSeminalRootLengthPerDay">0.015</parameter>
     <parameter id="RDMCR" description="Maximum rooting depth" unit="http://www.wurvoc.org/vocabularies/om-1.8/metre">0.5</parameter>
     <parameter id="DVSDR" description="development stage above which death of roots and stems starts" unit="http://www.wurvoc.org/vocabularies/om-1.8/one">1.5</parameter>
-    <parameter id="DVSDLT" description="development stage above which death of leaves starts in dependence of mean daily temperature" unit="http://www.wurvoc.org/vocabularies/om-1.8/one">1.5</parameter>
+    <parameter id="DVSDLT" description="development stage above which death of leaves starts in dependence of mean daily temperature" unit="http://www.wurvoc.org/vocabularies/om-1.8/one">1.8</parameter>
 
     <parameter id="RDRNS" description="max. relative death rate of leaves due to nutrient (N-P-K) stress" unit="http://www.wurvoc.org/vocabularies/om-1.8/reciprocal_day">0.05</parameter>
     <parameter id="DVSNLT" description=" development stage above which no crop N-P-K uptake does occur" unit="http://www.wurvoc.org/vocabularies/om-1.8/one">1.6</parameter>
@@ -254,7 +254,7 @@
     <parameter id="LRKR" description=" maximum K concentration in roots as fraction of maximum K concentration in leaves" unit="http://www.wurvoc.org/vocabularies/om-1.8/one">0.50</parameter>
     <parameter id="LSKR" description=" maximum K concentration in stems as fraction of maximum K concentration in leaves" unit="http://www.wurvoc.org/vocabularies/om-1.8/one">0.50</parameter>
     <parameter id="NLAI" description=" coefficient for the reduction due to nutrient (N-P-K) stress of the LAI increase (during juvenile phase)" unit="http://www.wurvoc.org/vocabularies/om-1.8/one">1.0</parameter>
-    <parameter id="NLUE" description=" coefficient for the reduction of RUE due to nutrient (N-P-K) stress" unit="http://www.wurvoc.org/vocabularies/om-1.8/one">1.1</parameter>
+    <parameter id="NLUE" description=" coefficient for the reduction of RUE due to nutrient (N-P-K) stress" unit="http://www.wurvoc.org/vocabularies/om-1.8/one">0.95</parameter>
     <parameter id="NMAXSO" description=" maximum N concentration (= 1.6*min. N conc.) in storage organs" unit="http://www.wurvoc.org/vocabularies/om-1.8/gram_per_gram">0.0136</parameter>
     <parameter id="PMAXSO" description=" maximum P concentration (= 1.6*min. P conc.) in storage organs" unit="http://www.wurvoc.org/vocabularies/om-1.8/gram_per_gram">0.00176</parameter>
     <parameter id="KMAXSO" description=" maximum K concentration (= 1.6*min. K conc.) in storage organs" unit="http://www.wurvoc.org/vocabularies/om-1.8/gram_per_gram">0.0176</parameter>
@@ -325,7 +325,7 @@
     <parameter id="KcbMid" description="" unit=" ">1.10</parameter>
     <parameter id="KcbEnd" description="" unit=" ">0.70</parameter>
     <parameter id="CropHt" description="" unit=" ">1.5</parameter>
-    <parameter id="FRTDM" description="" unit="-" datatype="DOUBLE">0.05</parameter>
+    <parameter id="FRTDM" description="" unit="-" datatype="DOUBLE">0.0375</parameter>
     <parameter id="RemoveRatioStorageOrgan" description="" unit="kgN per ton" datatype="DOUBLE">18.1</parameter>
     <parameter id="RemoveRatioStraw" description="" unit="kgN per ton" datatype="DOUBLE">5.0</parameter>
     <parameter id="FreshratioStorageOrgan" description="" unit="" datatype="DOUBLE">0.86</parameter>
