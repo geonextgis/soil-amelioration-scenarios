@@ -16,11 +16,11 @@
 			<filename>${_DATADIR_}/${vRow}/daily_mean_RES1_C${vColumn}R${vRow}.csv.gz</filename>			
 		</interface>
 
-		<interface id="crop_growth" type="CSV">
+		<!-- <interface id="crop_growth" type="CSV">
 			<poolsize>5000</poolsize>
 			<divider>;</divider>
 			<filename>${_OUTPUTDIR_}/daily/${vLocationID}_daily.csv</filename>
-		</interface>
+		</interface> -->
 		<interface id="lintul5yearly" type="CSV">
 			<poolsize>100</poolsize>
 			<divider>;</divider>

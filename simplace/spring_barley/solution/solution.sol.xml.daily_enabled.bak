@@ -9,7 +9,7 @@
 		<var id="spinupdays" datatype="INT">0</var>   <!-- warm up -->
 		<var id="vIOPT" datatype="INT">4</var> 		<!-- IOPT=1 potential production, IOPT=2 water limited production, IOPT=3 nutrient limited, IOPT= 4 water & nutrient limitations -->
 		<var id="vTRANRF" datatype="DOUBLE">1.0</var>
-		<var id="vCultivarGroup" datatype="CHAR" unit="">winter_rapeseed</var> 
+		<var id="vCultivarGroup" datatype="CHAR" unit="">spring_barley</var> 
 		<var id="vAverageGroundTemperature" datatype="DOUBLE">9.51</var>
 		<var id="vAverageBulkDensity" datatype="DOUBLE">1.5</var>
 		<var id="vFirstDayMeanTemp" datatype="DOUBLE">2.28</var>
@@ -32,7 +32,7 @@
 		<!-- <var id="vLocation" description="key to select corresponding phenology file [W]" datatype="CHAR" unit="-">cefit</var> cefit project at CKA -->
 		<var id="startdate" datatype="DATE">01.01.1978</var> <!-- 01.04.2010 -->
 		<var id="enddate" datatype="DATE">30.12.2021</var>   <!-- 30.09.2016 ; 30.12.2019 -->
-		 <var id="vIDPL" datatype="INT" unit="-">237</var>
+		 <var id="vIDPL" datatype="INT" unit="-">39</var>
 <!-- 		<var id="vReInitializeDOY" datatype="INT" unit="-">180</var> -->
 		<var id="vFertilizerScenario" datatype="INT">2</var>  <!-- Lu2Y (AP 61 and 90): 1 (lower N application), Chi2Y (AP62 and 88) and Fes1Y (AP5 and 27): 2 -->
 		<var id="vSoiltype" datatype="CHAR">AP5</var>  <!-- soil characteristics per plot or treatment -->
@@ -60,7 +60,7 @@
 		<interface id="managementfile2" type="CSV">
 			<poolsize>1</poolsize>
 			<divider>,</divider>
-			<filename>${_WORKDIR_}/data/management/fertilizer_winter_rapeseed.csv</filename>
+			<filename>${_WORKDIR_}/data/management/fertilizer_spring_barley.csv</filename>
 		</interface>
 		<interface id="fertilizercomposition" type="XML">
 			<poolsize>100</poolsize>
@@ -948,6 +948,7 @@
 			<input id="cVBASE" source="crop.VBASE" />
 			<input id="cVERSAT" source="crop.VERSAT" />
 			<input id="cVERNRT" source="crop.VERNRT" />
+		
 			<input id="cPhotoperiodTableHour" source="crop.PhotoperiodTableHour"/>
 			<input id="cPhotoperiodTableFactor" source="crop.PhotoperiodTableFactor"/>
 			
@@ -1686,7 +1687,7 @@
 
 		<!-- DAILY OUTPUT -->
 			
-		<!-- <output id="Daily_crop_growth" interface="crop_growth" frequence="DAILY" cachesize="10">
+		<output id="Daily_crop_growth" interface="crop_growth" frequence="DAILY" cachesize="10">
 			<header>
 				<out id="Location" rule="vLocationID" datatype="INT" unit="-"/>
 				<out id="Year" rule="CURRENT.YEAR" description="current model year" datatype="INT" unit="-"/>
@@ -1694,11 +1695,32 @@
 				<out id="DATE" rule="CURRENT.DATE" description="current model date" datatype="DATE" unit="-"/>
 				<out id="NUTSID" rule="vNUTS_ID" description="current model date" datatype="CHAR" unit="-"/>
 				<out id="STATE_ID" rule="vSTATE_NAME" description="current model date" datatype="CHAR" unit="-"/>
+<!-- 				<out id="DoSow" rule="DefaultManagement.DoSow" datatype="BOOLEAN" unit="-" />  -->
+<!-- 				<out id="PlantingDOY" rule="phenology.sowing" datatype="INT" unit="-" />	 -->
+<!-- 				<out id="EmergenceDATE" rule="Phenology.EmergenceDate" datatype="DATE" unit="-"/> -->
+<!-- 				<out id="EmergenceDOY" rule="Phenology.EmergenceDOY" datatype="INT" unit="-"/> -->
+<!-- 				<out id="AnthesisDate" datatype="DATE" rule="Phenology.AnthesisDate"/> -->
+<!-- 				<out id="AnthesisDOY" datatype="INT" rule="Phenology.AnthesisDOY"/> -->
+<!-- 				<out id="MilkripenessDate" rule="Phenology.MilkripenessDate" description="current model date of year" datatype="DATE" unit="-"/> -->
+<!-- 				<out id="MilkripenessDOY" rule="Phenology.MilkripenessDOY" description="current model date of year" datatype="INT" unit="-"/> -->
+<!-- 				<out id="MaturityDate" rule="Phenology.MaturityDate" description="current model date of year" datatype="DATE" unit="-"/> -->
+<!-- 				<out id="MaturityDOY" rule="Phenology.MaturityDOY" description="current model date of year" datatype="INT" unit="-"/> -->
+<!-- 				<out id="HarvestDATE" rule="CURRENT.DATE" description="current model date of year" datatype="DATE" unit="-"/> -->
 				<out id="DevStage" rule="Phenology.sDVS" description="development stage of crop (from 0 to 2)" datatype="DOUBLE" unit="http://www.wurvoc.org/vocabularies/om-1.8/one" format="%.6f"/>
 				<out id="CO2" rule="CO2Supply.CO2" description="monthly CO2 concentration (ppm) driving RadiationUseEfficiency" datatype="DOUBLE" format="%.4f"/>
+<!-- 				<out id="Rain" datatype="DOUBLE" mode="SUM" rule="weather.Rain" format="%.6f"/> -->
+<!-- 				<out id="Radiation" datatype="DOUBLE" mode="SUM" rule="weather_transform.SradiationMJ" format="%.6f"/>  -->
+<!-- 				<out id="Tmax" datatype="DOUBLE" mode="AVG" rule="weather.AirTemperatureMax" format="%.6f"/> -->
+<!-- 				<out id="Tmin" datatype="DOUBLE" mode="AVG" rule="weather.AirTemperatureMin" format="%.6f"/> -->
 				<out id="LAI" rule="Biomass.sLAI" description="leaf area index  (leaf area per soil surface)" datatype="DOUBLE" format="%.6f"/>
+<!-- 				<out id="AGBiomass_t_ha" rule="(${Biomass.sTAGB})*0.01" mode="MAX" description="total above-ground living biomass" datatype="DOUBLE" format="%.6f" -->
+<!-- 					unit="http://www.wurvoc.org/vocabularies/om-1.8/gram_per_square_metre"/> -->
+<!-- 				<out id="ActualEvapotranspiration" datatype="DOUBLE" mode="SUM" rule="SlimWater.ActualEvapotranspiration" format="%.6f"/> -->
+<!-- 				<out id="PotentialEvapotranspiration" datatype="DOUBLE" mode="SUM" rule="SlimWater.PotentialEvapotranspiration" format="%.6f"/> -->
+<!-- 				<out id="TotalCropAvailWaterContent" datatype="DOUBLE" mode="SUM" rule="SlimWater.TotalCropAvailWaterContent" format="%.6f"/> -->
+<!-- 				<out id="TotalSoilAvailWaterContent" datatype="DOUBLE" mode="SUM" rule="SlimWater.TotalSoilAvailWaterContent" format="%.6f"/>				 -->
 			</header>
-		</output> -->
+		</output>
 		<output id="LintulYearly" interface="lintul5yearly" frequence="BOOLEAN" rule="HarvestManagement.DoHarvest" cachesize="10">
 			<header>
 				<out id="Location" rule="vLocationID" description="current model location" datatype="INT" unit="-"/>
