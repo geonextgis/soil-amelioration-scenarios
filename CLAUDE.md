@@ -82,6 +82,10 @@ schema, so they are interchangeable inputs.
   `/data01/FDS/muduchuru/Atmos/NEXGDDP_HYRAS_BC_CSV/<MODEL>/<SCENARIO>/<col>/...`
   - Models: `ACCESS-CM2, CanESM5, EC-Earth3, GFDL-ESM4, MIROC6` (5 GCMs), plus `OBS` (HYRAS).
   - Scenarios per GCM: `historical, ssp126, ssp370`.
+  - MIROC6 `ssp126`/`ssp370` shipped with corrupt `TempMin` and produced no
+    output; both were re-delivered on 2026-08-21 and validate clean — see the
+    note under *Experiment Matrix*. Validate a source's value ranges, not just
+    its date coverage, before adding or refreshing a GCM.
 
 Note the two sources differ in **layout and delimiter**: DWD is tab-delimited
 gzip foldered by *row*; HYRAS is comma-delimited plain CSV foldered by *column*.
@@ -130,22 +134,59 @@ actual windows written into each `project.csv` are narrower, for two reasons tha
   harvest, and the yearly output only fires on `HarvestManagement.DoHarvest`, so
   the run "succeeds" with header-only files.
 - **Windows are clamped to the weather actually on disk** (`probe_coverage` +
-  `clamp_to_coverage`). DWD stops on 2024-08-30, and CanESM5/GFDL-ESM4 ship files
-  named `19510101_20141231` that really cover 1950-12-08 .. 2014-11-21. A window
-  running past the end of its weather file dies with a NullPointerException.
+  `clamp_to_coverage`). A window running past the end of its weather file dies
+  with a NullPointerException, so a period is never trusted from its filename.
+  DWD stops on 2024-08-30, which is what pulls the baseline back to a last window
+  of 2023. As of 2026-08-21 every HYRAS GCM file covers its nominal span exactly
+  — `historical` 1951-01-01 .. 2014-12-31 (23376 days), `ssp126`/`ssp370`
+  2015-01-01 .. 2100-12-31 (31411 days) — so nothing else is clamped. An earlier
+  delivery of CanESM5 and GFDL-ESM4 was on a re-stamped no-leap calendar running
+  24 days off nominal at the start and 40 at the end; that has been regenerated
+  upstream and is gone. Re-probe rather than assume if the source is refreshed
+  again.
 
-> **CanESM5 and GFDL-ESM4 are on a shifted calendar.** Their data starts 24 days
-> off nominal and ends 40 days off — a no-leap (365-day) model calendar re-stamped
-> onto consecutive real dates, so the offset grows across the record and a
-> day-of-year sowing rule lands progressively earlier in the real season.
-> `generate.py` drops the unusable windows and prints a warning, but the seasonal
-> misalignment is a property of the source data (owned by `muduchuru`) and cannot
-> be fixed downstream. Confirm the intended handling before publishing these runs.
+> **MIROC6 `ssp126`/`ssp370` were corrupt and have been fixed upstream
+> (2026-08-21).** As originally delivered, every row of every file stored
+> `TempMin` between −250 °C and −290 °C — the Kelvin→Celsius conversion applied
+> twice (7.11 °C written as −266.03). `TempMean`/`TempMax` were correct and
+> MIROC6 `historical` was never affected, so nothing announced the problem at
+> generation time: the files existed, the dates spanned the full period, and
+> `generate.py` had no reason to object. SIMPLACE then produced **no output at
+> all** — all 50 experiments (5 crops × 2 SSPs × 5 soils) ran and wrote empty
+> `out/<exp>/yearly/` dirs, and 40 wrote a `.completed_<exp_id>` marker anyway
+> because the runner does not validate output. `muduchuru` re-delivered both
+> scenarios on 2026-08-21; the replacements validate clean (TempMin
+> −24.7 … 26.3 °C for `ssp126`, −26.3 … 28.1 °C for `ssp370`, no NaN, no −999
+> sentinels in the temperatures, 31411 rows over 2015-01-01 … 2100-12-31), the
+> stale markers have been deleted and the 50 run dirs regenerated. The lasting
+> lesson is the failure mode, not the file: a bad *value range* is invisible to
+> `generate.py`, which only probes dates. Check ranges on every refresh.
+>
+> Roughly 2 % of rows in *every* GCM (MIROC6 included, and the lowest of the
+> five) have `TempMin > TempMax` or `TempMean` outside `[TempMin, TempMax]` —
+> the bias correction is applied per variable, so the daily ordering is not
+> preserved. That is a property of the whole dataset, not a MIROC6 defect, and
+> is not a reason to hold a source back.
 
 **Point set:** `point_to_nearest_grid.csv` carries 3099 PointIDs, but
 `location.csv` and `fertilizer_<crop>.csv` only cover the **3086** in the baseline
 project files. Generated experiments use those 3086 (`baseline_points`), so
 hist/future stay comparable with the baseline.
+
+**A complete run is not 3086 output files.** SIMPLACE writes
+`out/<exp>/yearly/<PointID>_yearly.csv` only once that location reaches
+`HarvestManagement.DoHarvest`, and one row per harvest — so a location that never
+matures gets **no file at all**, and a location that matures in some years gets a
+short one. Do not read a missing file as a failed job step. For `maize` this is
+routine, not an anomaly: under the cooler 1951–2014 GCM climate the median
+location harvests in only ~38 of 64 years, and 3–86 upland sites (Erzgebirge,
+Harz, Sauerland, Thüringer Wald, Black Forest, Allgäu) never harvest at all. The
+same sites survive under DWD (median 41/45) and under `ssp370` (median 85/86).
+Historical maize is therefore sparse and warm-year-biased — account for it before
+comparing baseline against historical. To tell "never matured" from "the step
+crashed", check whether the missing PointIDs are scattered (physics) or form a
+contiguous `start_line`–`end_line` block (a failed job step), and confirm against
+`sacct`.
 
 ## Running Simulations
 
